@@ -74,7 +74,7 @@ The C program is designed for **sub-10ms latency**: libpcap in immediate mode (n
 
 ## Relay sequencing — `/etc/ic905-relay.conf`
 
-The band→relay map is **user-editable** and supports **timed sequencing**: multiple relays per band, each with a millisecond delay. Relays are numbered **1–6** (1–3 = board 1 `0x70`, 4–6 = board 2 `0x73`).
+The band→relay map is **user-editable** and supports **timed sequencing**: multiple relays per band, each with a millisecond delay. Relays are numbered **1–6** (1–3 = board 1 `0x70`, 4–6 = board 2 `0x73`). See [`CONFIG-EXAMPLES.md`](CONFIG-EXAMPLES.md) for ready-to-use sample configs.
 
 ```
 # relay, band, delay_ms
