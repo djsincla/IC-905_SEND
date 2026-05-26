@@ -1,0 +1,20 @@
+[Unit]
+Description=IC-905 Packet Capture and Relay Controller
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ic905-relay
+Restart=on-failure
+RestartSec=3
+User=root
+Group=root
+Nice=-10
+LimitMEMLOCK=8192
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ic905-relay
+
+[Install]
+WantedBy=multi-user.target

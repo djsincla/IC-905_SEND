@@ -1,0 +1,7 @@
+# build artifacts
+*.o
+ic905-relay
+
+# local backups / deployed config (may contain secrets)
+*.bak
+*.local.conf
