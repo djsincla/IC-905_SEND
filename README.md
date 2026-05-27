@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.1** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.2** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** microwave/VHF/UHF transceiver.
 
