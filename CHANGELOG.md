@@ -2,6 +2,9 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.8 — 2026-05-27
+- **Power on the status topic:** `ic905/status` now reads `online 50%` (liveness + current power level), `online` when power is unknown, and `offline` via the last-will on disconnect.
+
 ## v1.7 — 2026-05-27
 - **TX power fixed for all bands:** the power byte is at a fixed offset (236) and only appears in the radio's full (~240-byte) status frame; the abbreviated frames were clobbering it to 0. Now read byte 236 only when present, and never overwrite a known value from a short frame (power also resets on band change). Verified 23cm 25%, 3cm 10%.
 - **All six frequency offsets confirmed on-air** and locked into the defaults: 2m=0, 70cm=199, 23cm=889, 13cm=1738, 6cm=4687, 3cm=8611 MHz (corrected the earlier 13cm/6cm estimates). Still overridable via `freq_offset_<band>`.

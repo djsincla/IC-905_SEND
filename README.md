@@ -207,7 +207,7 @@ mqtt_pass   = <password>
 **Topics (retained):**
 | Topic | Payload |
 |---|---|
-| `ic905/status` | `online` / `offline` (offline via last-will) |
+| `ic905/status` | `online 50%` / `online` / `offline` — liveness + current power (offline via last-will) |
 | `ic905/band` | ham wavelength, e.g. `23cm` |
 | `ic905/freq` | actual on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
 | `ic905/power` | TX power %, e.g. `25` |

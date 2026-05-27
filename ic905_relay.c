@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.7"
+#define IC905_VERSION   "1.8"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -195,6 +195,7 @@ static void mqtt_pub_band(void);
 static void mqtt_pub_tx(void);
 static void mqtt_pub_freq(void);
 static void mqtt_pub_power(void);
+static void mqtt_pub_status(void);
 static void mqtt_pub_state(void);
 
 /* ── Signal handling ──────────────────────────────────────────────────── */
@@ -726,6 +727,7 @@ static void apply_state(void)
     if (bt_changed) { mqtt_pub_band(); mqtt_pub_tx(); }
     mqtt_pub_freq();
     mqtt_pub_power();
+    mqtt_pub_status();
     mqtt_pub_state();
 }
 
@@ -885,6 +887,19 @@ static void mqtt_pub_power(void)
     mqtt_pub("power", buf, 1);
 }
 
+/* Liveness + current power on the status topic: "online 50%" / "online" / "offline".
+   (The last-will publishes "offline" on disconnect.) */
+static void mqtt_pub_status(void)
+{
+    if (!g_mosq) return;
+    char buf[24];
+    if (g_prev_state.power >= 0)
+        snprintf(buf, sizeof buf, "online %d%%", g_prev_state.power);
+    else
+        snprintf(buf, sizeof buf, "online");
+    mqtt_pub("status", buf, 1);
+}
+
 static void mqtt_pub_state(void)
 {
     if (!g_mosq) return;
@@ -958,7 +973,7 @@ static void cmd_drain(void)
 static void mqtt_republish_all(void)
 {
     if (!g_mosq) return;
-    mqtt_pub("status", "online", 1);
+    mqtt_pub_status();
     mqtt_pub_band();
     mqtt_pub_tx();
     mqtt_pub_freq();
