@@ -34,6 +34,26 @@ The C program is designed for **sub-10ms latency**: libpcap in immediate mode (n
 
 ---
 
+## Why a Raspberry Pi 5 — and how latency is managed
+
+**The platform.** This is a soft-real-time appliance: sniff a Gigabit Ethernet link, decode it, and flip the right relay within a few milliseconds of a key edge, 24/7. A Pi 5 fits that better than a microcontroller or a general-purpose PC:
+
+- **Four Cortex-A76 cores** — enough to hand the latency-critical path its *own* core and leave the OS, the MQTT broker, and networking on the others.
+- **Native Gigabit Ethernet** for the promiscuous `eth0` tap, plus hardware **I²C** and **GPIO** to drive the PCA9538A relay boards directly — no USB-latency middlemen.
+- A full **Linux (Debian 12)**, so `libpcap`, `libgpiod`, `mosquitto`, and `systemd` are all first-class, with a normal toolchain for building and maintaining the C service.
+- Low power, low cost, and small enough to live right at the tap as an always-on box.
+
+**Pinning the sequencer to a core.** The capture → decode → relay loop is the only timing-sensitive part, so it's isolated from everything else (all in `ic905-relay.service`):
+
+- **`CPUAffinity=3`** pins the whole service to **core 3**. The OS, MQTT broker, WiFi, and any monitoring run on cores 0–2 and can never preempt or jitter the relay timing.
+- **`Nice=-10`** raises its scheduling priority so it wins that core whenever it's runnable.
+- The code path is built for it: **libpcap immediate mode** (no kernel buffering), a **1 ms poll timeout**, **edge-triggered I²C writes** (only a board that changed is written), and **all relay/I²C mutation on the single capture thread** — MQTT runs on a separate thread that only *enqueues* commands, so the network stack never touches the relay path.
+- **Running lean** (see below) strips out background services that could otherwise contend for the machine.
+
+Net effect: a dedicated core doing one job at top priority → consistent **sub-10 ms key-to-relay latency**.
+
+---
+
 ## Hardware
 
 | Item | Detail |
