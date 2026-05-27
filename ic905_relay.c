@@ -37,6 +37,8 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
+#define IC905_VERSION   "1.1"
+
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
 
@@ -971,7 +973,7 @@ static void mqtt_stop(void)
 int main(void)
 {
     openlog("ic905-relay", LOG_PID | LOG_CONS | LOG_PERROR, LOG_DAEMON);
-    syslog(LOG_INFO, "IC-905 relay sequencer starting");
+    syslog(LOG_INFO, "IC-905 relay sequencer v%s starting", IC905_VERSION);
 
     setup_signals();
 

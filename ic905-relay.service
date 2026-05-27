@@ -11,6 +11,10 @@ RestartSec=3
 User=root
 Group=root
 Nice=-10
+# Pin the sequencer to CPU core 3 (Pi 5 cores are 0-3). Combined with Nice=-10,
+# the latency-critical relay timing keeps a core to itself while monitoring,
+# mosquitto, and the OS run on cores 0-2.
+CPUAffinity=3
 LimitMEMLOCK=8192
 StandardOutput=journal
 StandardError=journal
