@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.11"
+#define IC905_VERSION   "1.12"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -134,6 +134,8 @@ typedef struct {
     band_t   band_b;         /* sub-VFO band (byte 196) */
     uint64_t freq_b;         /* sub-VFO actual RF in Hz */
     int      split;          /* 1 = split enabled (byte 236 bit 7, read when idle) */
+    band_t   op_band;        /* OPERATING (transmit) band: split ? sub-VFO(196) : active(184) */
+    uint64_t op_freq;        /* operating (transmit) RF in Hz — the sub VFO's when split */
 } radio_state_t;
 
 /* ── Scheduled relay events ───────────────────────────────────────────── */
@@ -153,7 +155,7 @@ static volatile sig_atomic_t g_running = 1;
 static int                   g_i2c_fd  = -1;
 static uint8_t               g_board_output[2];      /* [0]=board1, [1]=board2 */
 static int                   relay_on[NUM_RELAYS];   /* physical relay state */
-static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0 };
+static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
 static uint64_t              g_freq = 0;             /* last decoded actual RF (Hz) */
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
@@ -568,10 +570,10 @@ static void reseq(radio_state_t prev, radio_state_t curr)
     int want[NUM_RELAYS] = { 0 };
     if (curr.transmitting)
         for (int r = 1; r <= NUM_RELAYS; r++)
-            if (!relay_locked[r - 1] && delay_for(r, curr.band) >= 0)
+            if (!relay_locked[r - 1] && delay_for(r, curr.op_band) >= 0)
                 want[r - 1] = 1;
 
-    band_t pband = (prev.band < BAND_COUNT) ? prev.band : BAND_UNKNOWN;
+    band_t pband = (prev.op_band < BAND_COUNT) ? prev.op_band : BAND_UNKNOWN;
 
     /* down-set max delay (using the previous band) for mirroring */
     int dmax = 0, have_down = 0;
@@ -600,7 +602,7 @@ static void reseq(radio_state_t prev, radio_state_t curr)
     for (int r = 1; r <= NUM_RELAYS; r++) {
         if (relay_locked[r - 1]) continue;
         if (want[r - 1] && !relay_on[r - 1]) {
-            int d = delay_for(r, curr.band);
+            int d = delay_for(r, curr.op_band);
             if (d < 0) d = 0;
             sched_add(base + d, r, 1);
         }
@@ -649,7 +651,7 @@ static band_t freq_to_band(uint32_t freq)
 
 static radio_state_t decode_payload(const uint8_t *payload, int len)
 {
-    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0 };
+    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0 };
 
     /* TX state: byte 38 of the status/command frame — the controller's explicit
        transmit command to the RF deck (1 = TX, 0 = RX). Sent at every key edge,
@@ -714,8 +716,19 @@ static void apply_state(void)
     curr.band_b = g_band_b;
     curr.freq_b = g_freq_b;
     curr.split  = g_split;
+    /* The band/freq actually transmitted: in split the radio keys the SUB VFO
+       (byte 196), otherwise the active VFO (byte 184). The relays MUST sequence
+       this — confirmed on-air: split + active 23cm / sub 2m keys 2m, and with
+       both VFOs on one band the sub's frequency is the one transmitted. */
+    if (curr.split && curr.band_b < BAND_COUNT) {
+        curr.op_band = curr.band_b;
+        curr.op_freq = curr.freq_b;
+    } else {
+        curr.op_band = curr.band;
+        curr.op_freq = curr.freq;
+    }
 
-    int bt_changed    = (curr.band != g_prev_state.band ||
+    int bt_changed    = (curr.op_band != g_prev_state.op_band ||
                          curr.transmitting != g_prev_state.transmitting);
     int freq_changed  = (curr.freq != g_prev_state.freq);
     int power_changed = (curr.power != g_prev_state.power);
@@ -730,9 +743,12 @@ static void apply_state(void)
         band_t pb = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
         syslog(LOG_INFO, "Band: %s -> %s (%s MHz)", band_short[pb], band_short[cb], fbuf);
     }
-    if (curr.transmitting != g_prev_state.transmitting)
-        syslog(LOG_INFO, "TX: %s  %s  %s MHz", curr.transmitting ? "ON" : "OFF",
-               band_short[cb], fbuf);
+    if (curr.transmitting != g_prev_state.transmitting) {
+        band_t ob = curr.op_band < BAND_COUNT ? curr.op_band : BAND_UNKNOWN;
+        char obuf[24]; fmt_freq(curr.op_freq, obuf, sizeof obuf);
+        syslog(LOG_INFO, "TX: %s  %s  %s MHz%s", curr.transmitting ? "ON" : "OFF",
+               band_short[ob], obuf, curr.split ? "  [split: sub VFO]" : "");
+    }
     if (split_changed) {
         band_t sbb = curr.band_b < BAND_COUNT ? curr.band_b : BAND_UNKNOWN;
         char sbuf[24]; fmt_freq(curr.freq_b, sbuf, sizeof sbuf);
@@ -778,11 +794,11 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
     if (payload_len > TX_FLAG_OFFSET &&
         payload[CMD_TYPE_OFFSET] == 0x01 && payload[CMD_MSG_OFFSET] == CMD_MSG_ID) {
         radio_state_t s = decode_payload(payload, payload_len);
-        /* While transmitting, a NON-transmitting frame for a different band is the
-           dual-watch sub-VFO (spurious) — ignore it so it can't flip the band or
-           drop TX. But a frame that ASSERTS TX on a different band IS the transmit
-           band (split: the TX VFO is on a different band than the one displayed) —
-           always follow it, so the relays sequence the band actually transmitted. */
+        /* byte 184 is the ACTIVE VFO and stays put across a transmission. While
+           transmitting, ignore a NON-transmitting frame reporting a different band
+           (a transient dual-watch/scan artifact) so it can't disturb the latched
+           active band. The actual transmit band is derived from active + sub-VFO +
+           split in apply_state — in split the radio keys the SUB VFO (byte 196). */
         if (g_tx_bit && !s.transmitting && s.band != BAND_UNKNOWN && s.band != g_band) {
             /* ignore spurious sub-VFO (RX) frame during TX */
         } else {
@@ -893,11 +909,18 @@ static void mqtt_pub_band(void)
 
 static void mqtt_pub_tx(void)
 {
-    char buf[24];
-    if (g_prev_state.transmitting && g_prev_state.power >= 0)
-        snprintf(buf, sizeof buf, "ON %d%%", g_prev_state.power);   /* TX power level */
-    else
-        snprintf(buf, sizeof buf, "%s", g_prev_state.transmitting ? "ON" : "OFF");
+    char buf[48];
+    if (g_prev_state.transmitting) {
+        band_t ob = g_prev_state.op_band < BAND_COUNT ? g_prev_state.op_band : BAND_UNKNOWN;
+        char obuf[24]; fmt_freq(g_prev_state.op_freq, obuf, sizeof obuf);
+        /* the band + actual RF being transmitted (the SUB VFO when split) + power */
+        if (g_prev_state.power >= 0)
+            snprintf(buf, sizeof buf, "ON %s %s %d%%", band_short[ob], obuf, g_prev_state.power);
+        else
+            snprintf(buf, sizeof buf, "ON %s %s", band_short[ob], obuf);
+    } else {
+        snprintf(buf, sizeof buf, "OFF");
+    }
     mqtt_pub("tx", buf, 1);
 }
 
@@ -981,7 +1004,7 @@ static void mqtt_pub_state(void)
 static void reconcile_relay(int relay)
 {
     int desired = (g_prev_state.transmitting &&
-                   delay_for(relay, g_prev_state.band) >= 0) ? 1 : 0;
+                   delay_for(relay, g_prev_state.op_band) >= 0) ? 1 : 0;
     set_relay(relay, desired);
 }
 

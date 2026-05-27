@@ -2,6 +2,11 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.12 — 2026-05-27
+- **Relays now sequence the SUB VFO band when split is on (critical fix).** Confirmed on-air: **byte 184 is the active/displayed VFO and byte 196 the sub VFO, and in split the radio transmits on the *sub* VFO.** The relay logic had always sequenced the active VFO, so a split transmit (active 23cm / sub 2m) wrongly fired the 23cm relays instead of the 2m relay. The operating band/frequency is now `split ? sub-VFO : active-VFO`, and the relay sequencer, the `TX:` log, and `ic905/tx` all use it. With both VFOs on one band, the sub VFO's frequency is the one reported at TX.
+- **`ic905/tx` now carries the transmit band + RF + power**, e.g. `ON 2m 144.375.004 25%` (was `ON 25%`) — so the topic shows exactly what's on the air, including in split. `ic905/band` / `ic905/band_b` remain the active / sub VFO as before.
+- Supersedes the v1.11 premise (byte 184 does *not* switch to the TX band in split — it stays on the active VFO; the transmit band comes from the sub VFO + the split flag).
+
 ## v1.11 — 2026-05-27
 - **Relays sequence the actual TX band in split.** If a frame asserts TX (`byte 38 = 1`) on a band different from the one displayed/received — i.e. split with the transmit VFO on another band (RX 23cm / TX 2m) — the relays now follow the **transmitting** band. The dual-watch sub-VFO (non-transmitting, different band) is still ignored during TX. This closes a corner case where a mis-set split could otherwise have sequenced the wrong (displayed) band's relays.
 
