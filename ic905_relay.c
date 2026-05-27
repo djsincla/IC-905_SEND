@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.3"
+#define IC905_VERSION   "1.4"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -88,6 +88,17 @@ static const char *band_names[] = {
     [BAND_UNKNOWN] = "Unknown",
 };
 
+/* Ham wavelength names, for human-readable log/status lines. */
+static const char *band_short[] = {
+    [BAND_144]     = "2m",
+    [BAND_430]     = "70cm",
+    [BAND_1200]    = "23cm",
+    [BAND_2400]    = "13cm",
+    [BAND_5600]    = "6cm",
+    [BAND_10G]     = "3cm",
+    [BAND_UNKNOWN] = "?",
+};
+
 /* ── Relay hardware mapping (global relay numbers 1-6) ────────────────── */
 
 static const uint8_t relay_board[NUM_RELAYS] = {
@@ -119,6 +130,7 @@ typedef struct {
     band_t   band;
     int      transmitting;   /* 1 = TX, 0 = RX */
     uint32_t freq;           /* raw frequency value from the band field (doppler-adjusted) */
+    int      power;          /* TX power %, -1 if unknown */
 } radio_state_t;
 
 /* ── Scheduled relay events ───────────────────────────────────────────── */
@@ -138,9 +150,10 @@ static volatile sig_atomic_t g_running = 1;
 static int                   g_i2c_fd  = -1;
 static uint8_t               g_board_output[2];      /* [0]=board1, [1]=board2 */
 static int                   relay_on[NUM_RELAYS];   /* physical relay state */
-static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0 };
+static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
 static uint32_t              g_freq = 0;             /* last decoded frequency */
+static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
 static int                   g_tx_bit = 0;           /* TX bit from the last band frame */
 static int                   g_have_band = 0;        /* set once we've decoded a band */
 static struct timespec       g_last_activity;        /* time of last controller->deck frame (RX activity) */
@@ -174,6 +187,7 @@ static void mqtt_pub_mode(int relay);
 static void mqtt_pub_band(void);
 static void mqtt_pub_tx(void);
 static void mqtt_pub_freq(void);
+static void mqtt_pub_power(void);
 static void mqtt_pub_state(void);
 
 /* ── Signal handling ──────────────────────────────────────────────────── */
@@ -610,7 +624,7 @@ static band_t freq_to_band(uint32_t freq)
 
 static radio_state_t decode_payload(const uint8_t *payload, int len)
 {
-    radio_state_t state = { BAND_UNKNOWN, 0, 0 };
+    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1 };
 
     /* TX state: byte 38 of the status/command frame — the controller's explicit
        transmit command to the RF deck (1 = TX, 0 = RX). Sent at every key edge,
@@ -626,6 +640,11 @@ static radio_state_t decode_payload(const uint8_t *payload, int len)
         memcpy(&freq, &payload[BAND_OFFSET_FROM_START], sizeof(freq));
         state.freq = freq;
         state.band = freq_to_band(freq);
+
+        /* TX power %: single byte 4 from the END of this freq frame (Node-RED
+           offsetFromEnd 8 nibbles), scaled byte/255*100. Verified on 23cm:
+           0x40 = 25%. */
+        state.power = (payload[len - 4] * 100 + 127) / 255;
     }
 
     return state;
@@ -649,20 +668,24 @@ static void apply_state(void)
     /* TX is the controller's explicit transmit command — byte 38 of the 0x44
        status frame — latched in packet_handler. Works for every band. */
     curr.transmitting = g_tx_bit;
+    curr.power = g_power;
     (void)g_last_activity;
 
-    int bt_changed   = (curr.band != g_prev_state.band ||
-                        curr.transmitting != g_prev_state.transmitting);
-    int freq_changed = (curr.freq != g_prev_state.freq);
-    if (!bt_changed && !freq_changed) return;
+    int bt_changed    = (curr.band != g_prev_state.band ||
+                         curr.transmitting != g_prev_state.transmitting);
+    int freq_changed  = (curr.freq != g_prev_state.freq);
+    int power_changed = (curr.power != g_prev_state.power);
+    if (!bt_changed && !freq_changed && !power_changed) return;
 
-    if (curr.band != g_prev_state.band)
-        syslog(LOG_INFO, "Band: %s -> %s",
-               band_names[g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN],
-               band_names[curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN]);
+    band_t cb = curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN;
+    if (curr.band != g_prev_state.band) {
+        band_t pb = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
+        syslog(LOG_INFO, "Band: %s -> %s (%.3f MHz)", band_short[pb], band_short[cb],
+               curr.freq / 1e6);
+    }
     if (curr.transmitting != g_prev_state.transmitting)
-        syslog(LOG_INFO, "TX: %s (%s)", curr.transmitting ? "ON" : "OFF",
-               band_names[curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN]);
+        syslog(LOG_INFO, "TX: %s  %s  %.3f MHz", curr.transmitting ? "ON" : "OFF",
+               band_short[cb], curr.freq / 1e6);
 
     radio_state_t prev = g_prev_state;
     g_prev_state = curr;
@@ -670,6 +693,7 @@ static void apply_state(void)
     if (bt_changed) reseq(prev, curr);
     if (bt_changed) { mqtt_pub_band(); mqtt_pub_tx(); }
     mqtt_pub_freq();
+    mqtt_pub_power();
     mqtt_pub_state();
 }
 
@@ -705,6 +729,7 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
         if (s.band != BAND_UNKNOWN) {
             g_band      = s.band;
             g_freq      = s.freq;
+            g_power     = s.power;
             g_have_band = 1;
         }
     }
@@ -787,7 +812,7 @@ static void mqtt_pub_mode(int relay)
 static void mqtt_pub_band(void)
 {
     band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
-    mqtt_pub("band", band_names[b], 1);
+    mqtt_pub("band", band_short[b], 1);   /* ham wavelength name, e.g. "23cm" */
 }
 
 static void mqtt_pub_tx(void)
@@ -800,7 +825,15 @@ static void mqtt_pub_freq(void)
     if (!g_mosq) return;
     char buf[16];
     snprintf(buf, sizeof buf, "%u", g_prev_state.freq);
-    mqtt_pub("freq", buf, 1);   /* radio's reported tuning value (doppler-adjusted) */
+    mqtt_pub("freq", buf, 1);   /* radio's reported value: true RF on 2m, IF on higher bands */
+}
+
+static void mqtt_pub_power(void)
+{
+    if (!g_mosq || g_prev_state.power < 0) return;
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d", g_prev_state.power);
+    mqtt_pub("power", buf, 1);   /* TX power %, from the freq frame */
 }
 
 static void mqtt_pub_state(void)
@@ -808,8 +841,8 @@ static void mqtt_pub_state(void)
     if (!g_mosq) return;
     band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
     char buf[320];
-    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":%u,\"tx\":%d,\"relays\":[",
-                     band_names[b], g_prev_state.freq, g_prev_state.transmitting);
+    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":%u,\"tx\":%d,\"power\":%d,\"relays\":[",
+                     band_short[b], g_prev_state.freq, g_prev_state.transmitting, g_prev_state.power);
     for (int r = 0; r < NUM_RELAYS; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
     n += snprintf(buf + n, sizeof buf - n, "],\"modes\":[");
@@ -878,6 +911,7 @@ static void mqtt_republish_all(void)
     mqtt_pub_band();
     mqtt_pub_tx();
     mqtt_pub_freq();
+    mqtt_pub_power();
     for (int r = 1; r <= NUM_RELAYS; r++) { mqtt_pub_relay(r); mqtt_pub_mode(r); }
     mqtt_pub_state();
 }
