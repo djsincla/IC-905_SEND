@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.9"
+#define IC905_VERSION   "1.10"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -131,6 +131,9 @@ typedef struct {
     int      transmitting;   /* 1 = TX, 0 = RX */
     uint64_t freq;           /* actual on-air RF in Hz = reported IF + per-band offset */
     int      power;          /* TX power %, -1 if unknown */
+    band_t   band_b;         /* sub-VFO band (byte 196) */
+    uint64_t freq_b;         /* sub-VFO actual RF in Hz */
+    int      split;          /* 1 = split enabled (byte 236 bit 7, read when idle) */
 } radio_state_t;
 
 /* ── Scheduled relay events ───────────────────────────────────────────── */
@@ -150,10 +153,13 @@ static volatile sig_atomic_t g_running = 1;
 static int                   g_i2c_fd  = -1;
 static uint8_t               g_board_output[2];      /* [0]=board1, [1]=board2 */
 static int                   relay_on[NUM_RELAYS];   /* physical relay state */
-static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1 };
+static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
 static uint64_t              g_freq = 0;             /* last decoded actual RF (Hz) */
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
+static band_t                g_band_b = BAND_UNKNOWN; /* sub-VFO band (byte 196) */
+static uint64_t              g_freq_b = 0;            /* sub-VFO actual RF (Hz) */
+static int                   g_split = 0;             /* split enabled (byte 236 bit 7, idle) */
 /* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
    on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
    23cm=889, 13cm=1738, 6cm=4687, 3cm=8611. Override any via freq_offset_<band>. */
@@ -195,6 +201,9 @@ static void mqtt_pub_tx(void);
 static void mqtt_pub_freq(void);
 static void mqtt_pub_power(void);
 static void mqtt_pub_status(void);
+static void mqtt_pub_band_b(void);
+static void mqtt_pub_freq_b(void);
+static void mqtt_pub_split(void);
 static void mqtt_pub_state(void);
 
 /* ── Signal handling ──────────────────────────────────────────────────── */
@@ -640,7 +649,7 @@ static band_t freq_to_band(uint32_t freq)
 
 static radio_state_t decode_payload(const uint8_t *payload, int len)
 {
-    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1 };
+    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0 };
 
     /* TX state: byte 38 of the status/command frame — the controller's explicit
        transmit command to the RF deck (1 = TX, 0 = RX). Sent at every key edge,
@@ -663,11 +672,10 @@ static radio_state_t decode_payload(const uint8_t *payload, int len)
         state.freq = (uint64_t)rawif +
             (state.band < BAND_COUNT ? (uint64_t)g_offset_mhz[state.band] * 1000000ull : 0);
 
-        /* TX power %: byte at a FIXED offset, present only in the full (~240B)
-           status frame — the radio also sends abbreviated frames without it.
-           Verified 23cm 0x40=25%, 3cm 0x1a=10%. Leave power = -1 (unknown) on the
-           short frames so they don't clobber the value (handled in packet_handler). */
-        if (len > POWER_OFFSET)
+        /* TX power %: byte 236 of the full (~240B) frame is the forward-power meter
+           DURING TX; when idle that byte carries the split flag (bit 7) instead, so
+           only read power on TX frames (verified 23cm 0x40=25%, 3cm 0x1a=10%). */
+        if (len > POWER_OFFSET && state.transmitting)
             state.power = (payload[POWER_OFFSET] * 100 + 127) / 255;
     }
 
@@ -703,12 +711,17 @@ static void apply_state(void)
        status frame — latched in packet_handler. Works for every band. */
     curr.transmitting = g_tx_bit;
     curr.power = g_power;
+    curr.band_b = g_band_b;
+    curr.freq_b = g_freq_b;
+    curr.split  = g_split;
 
     int bt_changed    = (curr.band != g_prev_state.band ||
                          curr.transmitting != g_prev_state.transmitting);
     int freq_changed  = (curr.freq != g_prev_state.freq);
     int power_changed = (curr.power != g_prev_state.power);
-    if (!bt_changed && !freq_changed && !power_changed) return;
+    int sub_changed   = (curr.band_b != g_prev_state.band_b || curr.freq_b != g_prev_state.freq_b);
+    int split_changed = (curr.split != g_prev_state.split);
+    if (!bt_changed && !freq_changed && !power_changed && !sub_changed && !split_changed) return;
 
     band_t cb = curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN;
     char fbuf[24];
@@ -720,12 +733,20 @@ static void apply_state(void)
     if (curr.transmitting != g_prev_state.transmitting)
         syslog(LOG_INFO, "TX: %s  %s  %s MHz", curr.transmitting ? "ON" : "OFF",
                band_short[cb], fbuf);
+    if (split_changed) {
+        band_t sbb = curr.band_b < BAND_COUNT ? curr.band_b : BAND_UNKNOWN;
+        char sbuf[24]; fmt_freq(curr.freq_b, sbuf, sizeof sbuf);
+        syslog(LOG_INFO, "Split: %s  (sub %s %s MHz)", curr.split ? "ON" : "OFF",
+               band_short[sbb], sbuf);
+    }
 
     radio_state_t prev = g_prev_state;
     g_prev_state = curr;
 
     if (bt_changed) reseq(prev, curr);
     if (bt_changed) { mqtt_pub_band(); mqtt_pub_tx(); }
+    if (sub_changed)   { mqtt_pub_band_b(); mqtt_pub_freq_b(); }
+    if (split_changed) mqtt_pub_split();
     mqtt_pub_freq();
     mqtt_pub_power();
     mqtt_pub_status();
@@ -770,7 +791,20 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                 g_band      = s.band;
                 g_freq      = s.freq;
                 g_have_band = 1;
-                if (s.power >= 0) g_power = s.power;  /* only the full frame carries power */
+                if (s.power >= 0) g_power = s.power;  /* power only from TX full frames */
+            }
+            /* The full (~240B) frame also carries the sub-VFO frequency at byte 196,
+               and at byte 236 the split flag (bit 7) when idle. */
+            if (payload_len > 236) {
+                uint32_t subif = payload[196] | (payload[197] << 8) |
+                                 (payload[198] << 16) | ((uint32_t)payload[199] << 24);
+                band_t sb = freq_to_band(subif);
+                if (sb != BAND_UNKNOWN) {
+                    g_band_b = sb;
+                    g_freq_b = (uint64_t)subif + (uint64_t)g_offset_mhz[sb] * 1000000ull;
+                }
+                if (!s.transmitting)
+                    g_split = (payload[236] & 0x80) ? 1 : 0;   /* split flag, idle only */
             }
         }
     }
@@ -898,15 +932,38 @@ static void mqtt_pub_status(void)
     mqtt_pub("status", buf, 1);
 }
 
+static void mqtt_pub_band_b(void)
+{
+    band_t b = g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN;
+    mqtt_pub("band_b", band_short[b], 1);   /* sub-VFO wavelength */
+}
+
+static void mqtt_pub_freq_b(void)
+{
+    if (!g_mosq) return;
+    char buf[24];
+    fmt_freq(g_prev_state.freq_b, buf, sizeof buf);
+    mqtt_pub("freq_b", buf, 1);             /* sub-VFO actual RF, MHz.kHz.Hz */
+}
+
+static void mqtt_pub_split(void)
+{
+    mqtt_pub("split", g_prev_state.split ? "on" : "off", 1);
+}
+
 static void mqtt_pub_state(void)
 {
     if (!g_mosq) return;
-    band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
-    char buf[320];
-    char fbuf[24];
-    fmt_freq(g_prev_state.freq, fbuf, sizeof fbuf);
-    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"relays\":[",
-                     band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power);
+    band_t b  = g_prev_state.band   < BAND_COUNT ? g_prev_state.band   : BAND_UNKNOWN;
+    band_t bb = g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN;
+    char buf[384];
+    char fbuf[24], fbbuf[24];
+    fmt_freq(g_prev_state.freq,   fbuf,  sizeof fbuf);
+    fmt_freq(g_prev_state.freq_b, fbbuf, sizeof fbbuf);
+    int n = snprintf(buf, sizeof buf,
+                     "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"split\":%d,\"band_b\":\"%s\",\"freq_b\":\"%s\",\"relays\":[",
+                     band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power,
+                     g_prev_state.split, band_short[bb], fbbuf);
     for (int r = 0; r < NUM_RELAYS && n < (int)sizeof buf; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
     if (n < (int)sizeof buf)
@@ -978,6 +1035,9 @@ static void mqtt_republish_all(void)
     mqtt_pub_tx();
     mqtt_pub_freq();
     mqtt_pub_power();
+    mqtt_pub_band_b();
+    mqtt_pub_freq_b();
+    mqtt_pub_split();
     for (int r = 1; r <= NUM_RELAYS; r++) { mqtt_pub_relay(r); mqtt_pub_mode(r); }
     mqtt_pub_state();
 }

@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.9** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.10** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
@@ -208,13 +208,16 @@ mqtt_pass   = <password>
 | Topic | Payload |
 |---|---|
 | `ic905/status` | `online 50%` / `online` / `offline` — liveness + current power (offline via last-will) |
-| `ic905/band` | ham wavelength, e.g. `23cm` |
-| `ic905/freq` | actual on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
-| `ic905/power` | TX power %, e.g. `25` |
-| `ic905/tx` | `ON` / `OFF` |
+| `ic905/band` | main-VFO ham wavelength, e.g. `23cm` |
+| `ic905/freq` | main-VFO on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
+| `ic905/band_b` | sub-VFO wavelength, e.g. `2m` |
+| `ic905/freq_b` | sub-VFO on-air RF as `MHz.kHz.Hz`, e.g. `144.375.000` |
+| `ic905/split` | `on` / `off` (split enabled) |
+| `ic905/power` | TX power %, e.g. `25` (or `unknown`) |
+| `ic905/tx` | `ON 25%` while keyed (power included) / `OFF` |
 | `ic905/relay/<1-6>` | `close` / `open` |
 | `ic905/relay/<1-6>/mode` | `auto` / `manual` |
-| `ic905/state` | JSON `{"band","freq","tx","power","relays":[…],"modes":[…]}` |
+| `ic905/state` | JSON `{"band","freq","tx","power","split","band_b","freq_b","relays":[…],"modes":[…]}` |
 
 **Commands** (service subscribes `ic905/cmd/#`):
 | Topic | Payload | Effect |
