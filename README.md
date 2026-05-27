@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.4** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.5** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** microwave/VHF/UHF transceiver.
 
@@ -209,7 +209,7 @@ mqtt_pass   = <password>
 |---|---|
 | `ic905/status` | `online` / `offline` (offline via last-will) |
 | `ic905/band` | ham wavelength, e.g. `23cm` |
-| `ic905/freq` | radio's reported value in Hz — true RF on 2m, IF on higher bands |
+| `ic905/freq` | actual on-air RF in Hz (= reported IF + per-band offset; calibrate with `freq_offset_<band>`) |
 | `ic905/power` | TX power %, e.g. `25` |
 | `ic905/tx` | `ON` / `OFF` |
 | `ic905/relay/<1-6>` | `close` / `open` |

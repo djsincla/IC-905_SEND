@@ -2,6 +2,10 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.5 — 2026-05-26
+- **Actual on-air frequency:** the published/logged frequency is now the true RF, computed as `IF + per-band LO offset`. The IF tracks the dial 1:1, so it's exact to the Hz — verified on 23cm (IF 407.117 + 889 MHz = 1296.117 MHz, and a 7 Hz dial nudge shows as 7 Hz). The freq field is now 64-bit (6cm/3cm RF exceeds 32 bits).
+- **Per-band calibration:** offsets `2m = 0` and `23cm = 889 MHz` are confirmed on-air; `70cm`/`13cm`/`6cm`/`3cm` are estimates pending confirmation. Override any in the config: `freq_offset_<band> = <MHz>` (e.g. `freq_offset_23cm = 889`).
+
 ## v1.4 — 2026-05-26
 - **TX power in MQTT:** new `ic905/power` topic (and a `power` field in `ic905/state`) — the radio's TX-power setting as a percentage, decoded from the freq frame (verified on 23cm: `0x40` = 25%).
 - **Band as wavelength:** `ic905/band`, the state JSON, and the `Band:` / `TX:` log lines now use ham wavelength names (`2m`, `70cm`, `23cm`, …) and include the frequency in MHz.

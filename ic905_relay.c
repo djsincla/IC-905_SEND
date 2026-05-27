@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.4"
+#define IC905_VERSION   "1.5"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -129,7 +129,7 @@ static int        board_used[2] = { 0, 0 };   /* [0]=0x70, [1]=0x73 */
 typedef struct {
     band_t   band;
     int      transmitting;   /* 1 = TX, 0 = RX */
-    uint32_t freq;           /* raw frequency value from the band field (doppler-adjusted) */
+    uint64_t freq;           /* actual on-air RF in Hz = reported IF + per-band offset */
     int      power;          /* TX power %, -1 if unknown */
 } radio_state_t;
 
@@ -152,8 +152,15 @@ static uint8_t               g_board_output[2];      /* [0]=board1, [1]=board2 *
 static int                   relay_on[NUM_RELAYS];   /* physical relay state */
 static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
-static uint32_t              g_freq = 0;             /* last decoded frequency */
+static uint64_t              g_freq = 0;             /* last decoded actual RF (Hz) */
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
+/* Per-band LO offset (MHz): actual RF = reported IF + offset. 2m = 0 (the IF IS
+   the true RF); 23cm verified on-air (IF 407.117 + 889 = 1296.117). 70cm/13cm/
+   6cm/3cm are estimates pending confirmation — override via freq_offset_<band>. */
+static int                   g_offset_mhz[BAND_COUNT] = {
+    [BAND_144] = 0, [BAND_430] = 197, [BAND_1200] = 889,
+    [BAND_2400] = 1834, [BAND_5600] = 4527, [BAND_10G] = 8611,
+};
 static int                   g_tx_bit = 0;           /* TX bit from the last band frame */
 static int                   g_have_band = 0;        /* set once we've decoded a band */
 static struct timespec       g_last_activity;        /* time of last controller->deck frame (RX activity) */
@@ -397,6 +404,11 @@ static void load_config(const char *path)
             else if (!strcasecmp(key, "mqtt_prefix")) snprintf(g_mqtt_prefix, sizeof g_mqtt_prefix, "%s", val);
             else if (!strcasecmp(key, "mqtt_user"))   snprintf(g_mqtt_user, sizeof g_mqtt_user, "%s", val);
             else if (!strcasecmp(key, "mqtt_pass"))   snprintf(g_mqtt_pass, sizeof g_mqtt_pass, "%s", val);
+            else if (!strncasecmp(key, "freq_offset_", 12)) {
+                band_t b = band_from_token(key + 12);
+                if (b < BAND_COUNT) g_offset_mhz[b] = atoi(val);
+                else syslog(LOG_WARNING, "config line %d: unknown band in '%s'", lineno, key);
+            }
             else syslog(LOG_WARNING, "config line %d: unknown directive '%s'", lineno, key);
             continue;
         }
@@ -636,14 +648,19 @@ static radio_state_t decode_payload(const uint8_t *payload, int len)
        START of the payload — present only in the larger frames of this family
        (the small key-edge command frames carry TX but no frequency). */
     if (len >= BAND_OFFSET_FROM_START + BAND_BYTE_LEN) {
-        uint32_t freq;
-        memcpy(&freq, &payload[BAND_OFFSET_FROM_START], sizeof(freq));
-        state.freq = freq;
-        state.band = freq_to_band(freq);
+        uint32_t rawif;
+        memcpy(&rawif, &payload[BAND_OFFSET_FROM_START], sizeof(rawif));
+        state.band = freq_to_band(rawif);   /* band is classified from the raw IF */
+
+        /* The field is the radio's IF (the true RF only on 2m). Add the per-band
+           LO offset to recover the actual on-air RF. The IF tracks the dial 1:1,
+           so this is exact to the Hz — verified 23cm: IF 407.117 + 889 MHz =
+           1296.117 MHz. 64-bit because 6cm/3cm RF exceeds 32 bits. */
+        state.freq = (uint64_t)rawif +
+            (state.band < BAND_COUNT ? (uint64_t)g_offset_mhz[state.band] * 1000000ull : 0);
 
         /* TX power %: single byte 4 from the END of this freq frame (Node-RED
-           offsetFromEnd 8 nibbles), scaled byte/255*100. Verified on 23cm:
-           0x40 = 25%. */
+           offsetFromEnd 8 nibbles), scaled byte/255*100. Verified 23cm: 0x40 = 25%. */
         state.power = (payload[len - 4] * 100 + 127) / 255;
     }
 
@@ -823,9 +840,9 @@ static void mqtt_pub_tx(void)
 static void mqtt_pub_freq(void)
 {
     if (!g_mosq) return;
-    char buf[16];
-    snprintf(buf, sizeof buf, "%u", g_prev_state.freq);
-    mqtt_pub("freq", buf, 1);   /* radio's reported value: true RF on 2m, IF on higher bands */
+    char buf[24];
+    snprintf(buf, sizeof buf, "%llu", (unsigned long long)g_prev_state.freq);
+    mqtt_pub("freq", buf, 1);   /* actual on-air RF in Hz (IF + per-band offset) */
 }
 
 static void mqtt_pub_power(void)
@@ -841,8 +858,9 @@ static void mqtt_pub_state(void)
     if (!g_mosq) return;
     band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
     char buf[320];
-    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":%u,\"tx\":%d,\"power\":%d,\"relays\":[",
-                     band_short[b], g_prev_state.freq, g_prev_state.transmitting, g_prev_state.power);
+    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":%llu,\"tx\":%d,\"power\":%d,\"relays\":[",
+                     band_short[b], (unsigned long long)g_prev_state.freq,
+                     g_prev_state.transmitting, g_prev_state.power);
     for (int r = 0; r < NUM_RELAYS; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
     n += snprintf(buf + n, sizeof buf - n, "],\"modes\":[");
