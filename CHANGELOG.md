@@ -2,6 +2,11 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.15 — 2026-05-27
+- **Transmit-VFO / split detection reworked to be frequency-based and arrangement-independent (the real relay-safety fix).** The transmit VFO is now derived from **byte 236 bit 7 on *idle* frames = "the lower-frequency VFO is the transmit VFO"**, matched against the two VFO frequencies: **byte 184 = primary (displayed) VFO**, **byte 196 = secondary VFO**. The relays, the `TX:` log and `ic905/tx` sequence the band of whichever VFO actually transmits. `ic905/split` is derived as "transmitting on the non-displayed (secondary) VFO."
+- **Verified on-air (AB6A)** across every primary/secondary choice **and** with the two bands swapped onto the opposite VFOs — it tracks **frequency order, not the VFO A/B slot**, so it's correct no matter which VFO is primary or which band is on which VFO.
+- **Supersedes the v1.10–v1.14 attempts** that treated byte 236 bit 7 as a fixed "split" flag. That was wrong: the bit's apparent polarity flipped depending on which band was primary (because it is relative to frequency, not to split), so a split transmit could sequence the wrong band. byte 236 is the forward-power meter *during TX*, so the bit is only meaningful on idle frames. (Earlier confusion also came from reading frames mid-toggle — held steady, the decode is stable.)
+
 ## v1.12 — 2026-05-27
 - **Relays now sequence the SUB VFO band when split is on (critical fix).** Confirmed on-air: **byte 184 is the active/displayed VFO and byte 196 the sub VFO, and in split the radio transmits on the *sub* VFO.** The relay logic had always sequenced the active VFO, so a split transmit (active 23cm / sub 2m) wrongly fired the 23cm relays instead of the 2m relay. The operating band/frequency is now `split ? sub-VFO : active-VFO`, and the relay sequencer, the `TX:` log, and `ic905/tx` all use it. With both VFOs on one band, the sub VFO's frequency is the one reported at TX.
 - **`ic905/tx` now carries the transmit band + RF + power**, e.g. `ON 2m 144.375.004 25%` (was `ON 25%`) — so the topic shows exactly what's on the air, including in split. `ic905/band` / `ic905/band_b` remain the active / sub VFO as before.

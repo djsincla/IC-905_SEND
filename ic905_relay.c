@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.12"
+#define IC905_VERSION   "1.15"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -161,7 +161,11 @@ static uint64_t              g_freq = 0;             /* last decoded actual RF (
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
 static band_t                g_band_b = BAND_UNKNOWN; /* sub-VFO band (byte 196) */
 static uint64_t              g_freq_b = 0;            /* sub-VFO actual RF (Hz) */
-static int                   g_split = 0;             /* split enabled (byte 236 bit 7, idle) */
+static int                   g_tx_lowfreq = 0;        /* byte 236 bit 7 (idle): 1 = the LOWER-freq
+                                                          VFO is the transmit VFO (confirmed on-air,
+                                                          AB6A). Split is derived from this + the two
+                                                          VFO freqs, so it's independent of which VFO
+                                                          is primary/secondary. */
 /* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
    on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
    23cm=889, 13cm=1738, 6cm=4687, 3cm=8611. Override any via freq_offset_<band>. */
@@ -715,17 +719,27 @@ static void apply_state(void)
     curr.power = g_power;
     curr.band_b = g_band_b;
     curr.freq_b = g_freq_b;
-    curr.split  = g_split;
-    /* The band/freq actually transmitted: in split the radio keys the SUB VFO
-       (byte 196), otherwise the active VFO (byte 184). The relays MUST sequence
-       this — confirmed on-air: split + active 23cm / sub 2m keys 2m, and with
-       both VFOs on one band the sub's frequency is the one transmitted. */
-    if (curr.split && curr.band_b < BAND_COUNT) {
-        curr.op_band = curr.band_b;
-        curr.op_freq = curr.freq_b;
+    /* Which VFO actually transmits (the band the relays MUST sequence):
+       byte 236 bit 7 on IDLE frames (latched in g_tx_lowfreq) = "the LOWER-frequency
+       VFO is the transmit VFO". byte 184 = primary/displayed VFO band, byte 196 =
+       secondary VFO band. Comparing the two VFO freqs and matching to that bit gives
+       the TX VFO independent of which VFO is primary, AND independent of which band
+       sits on VFO A vs B. Confirmed on-air (AB6A) across every primary/secondary and
+       swapped-VFO/band arrangement — it tracks FREQUENCY ORDER, not the A/B slot.
+       "split" is simply transmitting on the non-displayed (secondary) VFO.
+       NOTE: byte 236 is the forward-power meter during TX, so this bit is read only
+       on idle frames; the earlier "split = byte 236 bit 7" reading was wrong because
+       the bit's split-meaning flips with which band is primary. */
+    if (curr.band_b < BAND_COUNT) {                 /* two VFOs active */
+        int primary_lower = (curr.freq <= curr.freq_b);
+        int tx_primary    = (g_tx_lowfreq == primary_lower);
+        curr.op_band = tx_primary ? curr.band : curr.band_b;
+        curr.op_freq = tx_primary ? curr.freq : curr.freq_b;
+        curr.split   = tx_primary ? 0 : 1;
     } else {
         curr.op_band = curr.band;
         curr.op_freq = curr.freq;
+        curr.split   = 0;
     }
 
     int bt_changed    = (curr.op_band != g_prev_state.op_band ||
@@ -821,7 +835,8 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                     g_freq_b = (uint64_t)subif + (uint64_t)g_offset_mhz[sb] * 1000000ull;
                 }
                 if (!s.transmitting)
-                    g_split = (payload[236] & 0x80) ? 1 : 0;   /* split flag, idle only */
+                    g_tx_lowfreq = (payload[236] & 0x80) ? 1 : 0;  /* idle only: bit 7 set =
+                        the LOWER-frequency VFO is the transmit VFO (AB6A, on-air) */
             }
         }
     }

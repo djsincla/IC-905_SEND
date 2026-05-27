@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.12** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.15** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
@@ -212,7 +212,7 @@ mqtt_pass   = <password>
 | `ic905/freq` | active-VFO on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
 | `ic905/band_b` | **sub** VFO wavelength, e.g. `2m` (byte 196) |
 | `ic905/freq_b` | sub-VFO on-air RF as `MHz.kHz.Hz`, e.g. `144.375.000` |
-| `ic905/split` | `on` / `off` — when **on, the radio transmits on the sub VFO**, and the relays sequence *that* band |
+| `ic905/split` | `on` / `off` — derived: transmitting on the **non-displayed (secondary) VFO**. The transmit VFO is found from byte 236 bit 7 (idle) = *"the lower-frequency VFO transmits"* matched to the two VFO freqs, so the relays always sequence the band actually transmitted — regardless of which VFO is primary or which band is on VFO A/B |
 | `ic905/power` | TX power %, e.g. `25` (or `unknown`) |
 | `ic905/tx` | the **transmit** band + RF + power, e.g. `ON 2m 144.375.004 25%` (the sub VFO when split) / `OFF` |
 | `ic905/relay/<1-6>` | `close` / `open` |
