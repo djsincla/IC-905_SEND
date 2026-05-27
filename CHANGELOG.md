@@ -2,6 +2,9 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.2 — 2026-05-26
+- **Glitch-free relay init:** clear the PCA9538A output registers *before* switching the pins to outputs. Previously, because the expander's output register powers up at `0xFF`, enabling the outputs first could briefly drive the relay pins HIGH and momentarily close every relay at startup. Relays now go straight from high-Z to OPEN with no transient. (No deliberate relay cycling happens at startup either way — the service waits for a decoded TX before touching a relay.)
+
 ## v1.1 — 2026-05-26
 - **CPU isolation safeguard:** pin the relay sequencer to CPU core 3 (`CPUAffinity=3` in the systemd unit). Combined with `Nice=-10`, the latency-critical relay timing keeps a core to itself while the MQTT broker, any monitoring, and the OS run on cores 0–2 — so they can never jitter the sequencing.
 - Service now reports its version at startup.

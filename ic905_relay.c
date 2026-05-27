@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.1"
+#define IC905_VERSION   "1.2"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -262,12 +262,21 @@ static int i2c_init(void)
         return -1;
     }
 
-    /* Configure P0-P2 as outputs (0 = output), P3-P7 as inputs (1 = input).
+    /* Drive every relay OPEN *before* enabling the outputs. The PCA9538A output
+       register powers up at 0xFF, so setting the config register (P0-P2 =
+       outputs) first would briefly drive the pins HIGH and close every relay
+       until the output write lands. Clearing the output register while the pins
+       are still inputs (high-Z), then switching them to outputs, makes them go
+       straight to LOW (open) with no transient — relays never twitch at startup.
        Only touch boards that have relays mapped; others are left untouched. */
+    for (int r = 0; r < NUM_RELAYS; r++) relay_on[r] = 0;
+    if (board_used[0]) { g_board_output[0] = 0; if (i2c_write_reg(BOARD1_ADDR, PCA9538A_REG_OUTPUT, 0x00) < 0) return -1; }
+    if (board_used[1]) { g_board_output[1] = 0; if (i2c_write_reg(BOARD2_ADDR, PCA9538A_REG_OUTPUT, 0x00) < 0) return -1; }
+
+    /* Now enable P0-P2 as outputs (0 = output), P3-P7 as inputs (1 = input);
+       the pins immediately drive the 0x00 we just set, so all relays stay open. */
     if (board_used[0] && i2c_write_reg(BOARD1_ADDR, PCA9538A_REG_CONFIG, 0xF8) < 0) return -1;
     if (board_used[1] && i2c_write_reg(BOARD2_ADDR, PCA9538A_REG_CONFIG, 0xF8) < 0) return -1;
-
-    open_all_relays();
 
     syslog(LOG_INFO, "PCA9538A initialized (boards:%s%s)",
            board_used[0] ? " 0x70" : "", board_used[1] ? " 0x73" : "");
