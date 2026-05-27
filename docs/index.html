@@ -193,10 +193,26 @@
 
 <footer>
   <div class="wrap">
-    <span>IC-905 SEND <strong style="color:var(--ember)">v1.1</strong> · <strong style="color:var(--ember)">AB6A</strong> · Raspberry Pi · libpcap + libgpiod + MQTT</span>
+    <span>IC-905 SEND <strong class="ver" style="color:var(--ember)">v1.1</strong> · <strong style="color:var(--ember)">AB6A</strong> · Raspberry Pi · libpcap + libgpiod + MQTT</span>
     <span><a href="https://github.com/djsincla/IC-905_SEND">github.com/djsincla/IC-905_SEND</a></span>
   </div>
 </footer>
+
+<script>
+  /* Keep the displayed version in sync with the latest entry in CHANGELOG.md,
+     so a version bump only needs a changelog edit. Falls back to the baked-in
+     value if the fetch fails. */
+  fetch('https://raw.githubusercontent.com/djsincla/IC-905_SEND/main/CHANGELOG.md', { cache: 'no-cache' })
+    .then(function (r) { return r.ok ? r.text() : Promise.reject(); })
+    .then(function (t) {
+      var m = t.match(/##\s*v?(\d+\.\d+(?:\.\d+)?)/);
+      if (m) {
+        var v = 'v' + m[1];
+        document.querySelectorAll('.ver').forEach(function (e) { e.textContent = v; });
+      }
+    })
+    .catch(function () { /* keep the baked-in version */ });
+</script>
 
 </body>
 </html>
