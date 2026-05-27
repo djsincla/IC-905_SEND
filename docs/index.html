@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IC-905 SEND — Ethernet Relay Sequencer</title>
+<meta name="description" content="Native C service that decodes the Icom IC-905 controller↔RF-deck Ethernet link to drive band-specific relay sequencing — for every band, 2m through 10 GHz.">
+<style>
+  :root{
+    --burnt:#c0451d;        /* burnt orange */
+    --burnt-bright:#e2701f;
+    --burnt-deep:#7a2810;
+    --ember:#f0a35e;
+    --bg:#17110d;
+    --bg-2:#1f1813;
+    --card:#251c16;
+    --line:#3a2c22;
+    --text:#f2e8df;
+    --muted:#bba593;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  a{color:var(--ember);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+
+  /* hero */
+  header.hero{
+    background:
+      radial-gradient(1200px 400px at 70% -10%, rgba(226,112,31,.30), transparent 60%),
+      linear-gradient(160deg,var(--burnt-deep) 0%, #2a1a12 55%, var(--bg) 100%);
+    border-bottom:1px solid var(--line);
+    padding:84px 0 64px;
+  }
+  .badge{
+    display:inline-block;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ember);border:1px solid var(--burnt);border-radius:999px;
+    padding:5px 14px;margin-bottom:22px;background:rgba(192,69,29,.12);
+  }
+  h1{
+    font-size:clamp(2.6rem,7vw,4.4rem);line-height:1.02;letter-spacing:-.02em;font-weight:800;
+    background:linear-gradient(90deg,#ffb877,var(--burnt-bright) 55%,var(--burnt));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .tagline{font-size:clamp(1.05rem,2.4vw,1.4rem);color:var(--text);margin-top:18px;max-width:680px}
+  .sub{color:var(--muted);margin-top:14px;max-width:680px}
+  .cta{margin-top:34px;display:flex;gap:14px;flex-wrap:wrap}
+  .btn{
+    display:inline-block;font-weight:600;border-radius:10px;padding:12px 22px;font-size:.98rem;
+  }
+  .btn-primary{background:var(--burnt);color:#fff;border:1px solid var(--burnt-bright)}
+  .btn-primary:hover{background:var(--burnt-bright);text-decoration:none}
+  .btn-ghost{border:1px solid var(--line);color:var(--text)}
+  .btn-ghost:hover{border-color:var(--burnt);text-decoration:none;color:var(--ember)}
+
+  section{padding:60px 0}
+  h2{font-size:1.7rem;letter-spacing:-.01em;margin-bottom:8px}
+  h2 .dot{color:var(--burnt-bright)}
+  .lead{color:var(--muted);margin-bottom:34px;max-width:680px}
+
+  /* feature grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;
+    transition:border-color .15s ease,transform .15s ease;
+  }
+  .card:hover{border-color:var(--burnt);transform:translateY(-2px)}
+  .card .ic{font-size:1.4rem;margin-bottom:10px;display:block}
+  .card h3{font-size:1.05rem;margin-bottom:6px}
+  .card p{color:var(--muted);font-size:.94rem}
+
+  /* band table */
+  .panel{background:var(--bg-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:.95rem}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+  th{color:var(--ember);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase}
+  tbody tr:hover{background:rgba(192,69,29,.07)}
+  td.mono{color:var(--text)}
+  .note{color:var(--muted);font-size:.86rem;margin-top:14px}
+
+  /* how it works */
+  .flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:10px}
+  .step{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--burnt);border-radius:10px;padding:18px}
+  .step .n{color:var(--burnt-bright);font-weight:700;font-size:.8rem;letter-spacing:.1em}
+  .step h4{margin:6px 0 4px;font-size:1rem}
+  .step p{color:var(--muted);font-size:.9rem}
+
+  /* config */
+  .codeblock{
+    background:#120d0a;border:1px solid var(--line);border-left:3px solid var(--burnt);
+    border-radius:10px;padding:18px 20px;overflow-x:auto;margin-top:6px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:.86rem;line-height:1.75;color:#ecdfd2;white-space:pre;
+  }
+  .codeblock .c{color:#9b8472}
+  .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:22px 0 4px}
+  .field{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .field h4{font-size:.95rem;margin-bottom:4px}
+  .field h4 .mono{color:var(--ember)}
+  .field p{color:var(--muted);font-size:.88rem}
+
+  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--muted);font-size:.88rem}
+  footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .kbd{background:#000;border:1px solid var(--line);border-radius:6px;padding:1px 7px;color:var(--ember)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">Amateur Radio · Icom IC-905</span>
+    <h1>IC-905 SEND</h1>
+    <p class="tagline">Band-specific transmit sequencing for the IC-905 microwave transceiver — driven entirely off the <strong>Ethernet</strong> link between the controller and the RF deck.</p>
+    <p class="sub">A native C systemd service for the Raspberry Pi that taps the control stream, decodes band, frequency and the explicit transmit command, and drives PCA9538A relays as a timed TX/RX sequence — for every band, <strong>2m through 10&nbsp;GHz</strong>.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/djsincla/IC-905_SEND">View on GitHub →</a>
+      <a class="btn btn-ghost" href="https://github.com/djsincla/IC-905_SEND/blob/main/CONFIG-EXAMPLES.md">Config examples</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>What it does<span class="dot">.</span></h2>
+    <p class="lead">The IC-905 splits its controller and RF deck, linked only by Ethernet. This service listens on that link and turns it into precise, band-aware relay control — no SEND-jack PTT, no per-band wiring.</p>
+    <div class="grid">
+      <div class="card"><span class="ic">📡</span><h3>Pure-Ethernet TX</h3><p>Reads the controller's explicit transmit command (byte 38 of the <span class="mono">0x44</span> status frame) — works on every band, including 2m/70cm.</p></div>
+      <div class="card"><span class="ic">🎚️</span><h3>Band-aware</h3><p>Decodes band &amp; frequency from the same stream and switches the right relays for the active band.</p></div>
+      <div class="card"><span class="ic">⏱️</span><h3>Timed sequencing</h3><p>Per-relay millisecond delays close in order on TX and open mirrored on RX — protects amp and relay contacts.</p></div>
+      <div class="card"><span class="ic">📶</span><h3>MQTT monitor + control</h3><p>Authenticated local broker publishes band/TX/frequency/relay state and accepts manual relay commands over WiFi.</p></div>
+      <div class="card"><span class="ic">⚡</span><h3>Low latency</h3><p>Packet path stays off the network and MQTT threads, so relay timing is never blocked.</p></div>
+      <div class="card"><span class="ic">📝</span><h3>Config-driven</h3><p>A simple <span class="mono">/etc/ic905-relay.conf</span> maps bands to relays with delays — multi-band rules and per-band timing supported.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="wrap">
+    <h2>Every band, decoded<span class="dot">.</span></h2>
+    <p class="lead">The radio reports the true frequency only on 2m; every higher band reports an IF value it up-converts from. All six were measured on-air and map cleanly.</p>
+    <table>
+      <thead><tr><th>Band</th><th>Real frequency</th><th>Reported IF</th><th>Relay action</th></tr></thead>
+      <tbody>
+        <tr><td>2m</td><td>144 MHz</td><td class="mono">144.1 MHz · true</td><td>✓ verified</td></tr>
+        <tr><td>70cm</td><td>430 MHz</td><td class="mono">233.1 MHz</td><td>✓ verified</td></tr>
+        <tr><td>23cm</td><td>1296 MHz</td><td class="mono">407.0 MHz</td><td>✓ verified</td></tr>
+        <tr><td>13cm</td><td>2400 MHz</td><td class="mono">566.1 MHz</td><td>✓ verified</td></tr>
+        <tr><td>6cm</td><td>5600 MHz</td><td class="mono">1073.0 MHz</td><td>✓ verified</td></tr>
+        <tr><td>3cm</td><td>10 GHz</td><td class="mono">1757.3 MHz</td><td>✓ verified</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Classification keys off the decoded band, not the raw IF — boundaries centered on the measured values.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How it works<span class="dot">.</span></h2>
+    <div class="flow">
+      <div class="step"><div class="n">01</div><h4>Tap</h4><p>Promiscuous capture on <span class="mono">eth0</span> of the controller→deck stream (TCP 50004).</p></div>
+      <div class="step"><div class="n">02</div><h4>Decode</h4><p>Band/frequency at offset 184, TX state at byte 38 of the <span class="mono">0x44</span> frame.</p></div>
+      <div class="step"><div class="n">03</div><h4>Sequence</h4><p>Schedule relay open/close events per the config delays on each TX/RX edge.</p></div>
+      <div class="step"><div class="n">04</div><h4>Drive</h4><p>Write the PCA9538A I²C expanders; publish state to MQTT.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="wrap">
+    <h2>Configure it<span class="dot">.</span></h2>
+    <p class="lead">One plain-text file — <span class="mono">/etc/ic905-relay.conf</span> — maps bands to relays. Every rule is three fields:</p>
+    <div class="fields">
+      <div class="field"><h4><span class="mono">relay</span></h4><p>1–6. Relays 1–3 are on board 1 (I²C <span class="mono">0x70</span>), 4–6 on board 2 (<span class="mono">0x73</span>).</p></div>
+      <div class="field"><h4><span class="mono">band</span></h4><p><span class="mono">2m 70cm 23cm 13cm 6cm 3cm</span> (or MHz), or <span class="mono">all</span> for every band. Combine with <span class="mono">/</span>: <span class="mono">23cm/2m</span>.</p></div>
+      <div class="field"><h4><span class="mono">delay_ms</span></h4><p>Milliseconds after the TX edge before the relay closes. Per-band delays can be <span class="mono">/</span>-listed too.</p></div>
+    </div>
+    <pre class="codeblock"><span class="c"># relay, band, delay_ms</span>
+1, 23cm, 0       <span class="c"># 23cm: relay 1 closes immediately,</span>
+2, 23cm, 10      <span class="c">#        relay 2 ten ms later  (board 1)</span>
+4, 13cm, 0       <span class="c"># 13cm sequence on board 2</span>
+5, 13cm, 20
+3, all,  25      <span class="c"># amp PTT on ANY band, after the others</span>
+6, 2m/70cm, 0    <span class="c"># one relay shared by two bands</span></pre>
+    <p class="note">On <strong>TX</strong> the matching relays close in increasing-delay order; on <strong>RX</strong> they open in mirrored reverse order (same gaps), so contacts are never hot-switched. A band change while keyed ramps the old band down, then the new band up. Edit, then <span class="mono">sudo systemctl restart ic905-relay</span>. More ready-to-use patterns in <a href="https://github.com/djsincla/IC-905_SEND/blob/main/CONFIG-EXAMPLES.md">CONFIG-EXAMPLES.md</a>.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>IC-905 SEND · Raspberry Pi · libpcap + libgpiod + MQTT</span>
+    <span><a href="https://github.com/djsincla/IC-905_SEND">github.com/djsincla/IC-905_SEND</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
