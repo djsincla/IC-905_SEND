@@ -115,7 +115,7 @@
   <div class="wrap">
     <span class="badge">AB6A · Amateur Radio · Icom IC-905</span>
     <h1>IC-905 SEND</h1>
-    <p class="tagline">Band-specific transmit sequencing for the IC-905 microwave transceiver — driven entirely off the <strong>Ethernet</strong> link between the controller and the RF deck.</p>
+    <p class="tagline">Band-specific transmit sequencing for the IC-905 VHF/UHF/SHF Transceiver — driven entirely off the <strong>Ethernet</strong> link between the controller and the RF deck.</p>
     <p class="sub">A native C systemd service for the Raspberry Pi that taps the control stream, decodes band, frequency and the explicit transmit command, and drives PCA9538A relays as a timed TX/RX sequence — for every band, <strong>2m through 10&nbsp;GHz</strong>.</p>
     <div class="cta">
       <a class="btn btn-primary" href="https://github.com/djsincla/IC-905_SEND">View on GitHub →</a>
@@ -193,7 +193,7 @@
 
 <footer>
   <div class="wrap">
-    <span>IC-905 SEND <strong class="ver" style="color:var(--ember)">v1.1</strong> · <strong style="color:var(--ember)">AB6A</strong> · Raspberry Pi · libpcap + libgpiod + MQTT</span>
+    <span>IC-905 SEND <strong class="ver" style="color:var(--ember)">v1.9</strong> · <strong style="color:var(--ember)">AB6A</strong> · Raspberry Pi · libpcap + libgpiod + MQTT</span>
     <span><a href="https://github.com/djsincla/IC-905_SEND">github.com/djsincla/IC-905_SEND</a></span>
   </div>
 </footer>
@@ -202,7 +202,7 @@
   /* Keep the displayed version in sync with the latest entry in CHANGELOG.md,
      so a version bump only needs a changelog edit. Falls back to the baked-in
      value if the fetch fails. */
-  fetch('https://raw.githubusercontent.com/djsincla/IC-905_SEND/main/CHANGELOG.md', { cache: 'no-cache' })
+  fetch('https://raw.githubusercontent.com/djsincla/IC-905_SEND/main/CHANGELOG.md?_=' + Date.now(), { cache: 'no-cache' })
     .then(function (r) { return r.ok ? r.text() : Promise.reject(); })
     .then(function (t) {
       var m = t.match(/##\s*v?(\d+\.\d+(?:\.\d+)?)/);

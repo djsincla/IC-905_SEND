@@ -2,6 +2,11 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.9 — 2026-05-27
+- **Code-audit hardening / cleanup** (no behaviour change): removed dead `g_last_activity` and the stale "stream-silence" comments; log dropped MQTT commands when the queue is full; defensive `snprintf` bounds in the `state` JSON; documented the little-endian and I²C log-and-continue assumptions. A full senior-C audit found **no critical issues** — concurrency model, relay sequencer/scheduler, and packet bounds all verified sound.
+- **Splash version fixed:** the page footer fallback now matches the release and the changelog fetch is cache-busted, so the shown version no longer lags.
+- Radio re-labelled **VHF/UHF/SHF transceiver** (was "microwave").
+
 ## v1.8 — 2026-05-27
 - **Power on the status topic:** `ic905/status` now reads `online 50%` (liveness + current power level), `online` when power is unknown, and `offline` via the last-will on disconnect.
 

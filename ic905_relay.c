@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.8"
+#define IC905_VERSION   "1.9"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -163,7 +163,6 @@ static int                   g_offset_mhz[BAND_COUNT] = {
 };
 static int                   g_tx_bit = 0;           /* TX bit from the last band frame */
 static int                   g_have_band = 0;        /* set once we've decoded a band */
-static struct timespec       g_last_activity;        /* time of last controller->deck frame (RX activity) */
 static pcap_t               *g_pcap = NULL;          /* set after pcap setup; used by signal handler */
 
 /* ── MQTT (optional monitoring + control over WiFi) ───────────────────── */
@@ -250,6 +249,9 @@ static void write_board(int bidx)
         if (relay_on[r] && board_idx(relay_board[r]) == bidx)
             out |= relay_mask[r];
     g_board_output[bidx] = out;
+    /* Deliberate log-and-continue: i2c_write_reg already logs failures; we keep
+       the in-memory state and carry on (a transient bus error self-corrects on
+       the next edge / the GPIO reset at startup). */
     i2c_write_reg(addr, PCA9538A_REG_OUTPUT, out);
 }
 
@@ -651,7 +653,7 @@ static radio_state_t decode_payload(const uint8_t *payload, int len)
        (the small key-edge command frames carry TX but no frequency). */
     if (len >= BAND_OFFSET_FROM_START + BAND_BYTE_LEN) {
         uint32_t rawif;
-        memcpy(&rawif, &payload[BAND_OFFSET_FROM_START], sizeof(rawif));
+        memcpy(&rawif, &payload[BAND_OFFSET_FROM_START], sizeof(rawif)); /* LE field on a LE host (aarch64) */
         state.band = freq_to_band(rawif);   /* band is classified from the raw IF */
 
         /* The field is the radio's IF (the true RF only on 2m). Add the per-band
@@ -701,7 +703,6 @@ static void apply_state(void)
        status frame — latched in packet_handler. Works for every band. */
     curr.transmitting = g_tx_bit;
     curr.power = g_power;
-    (void)g_last_activity;
 
     int bt_changed    = (curr.band != g_prev_state.band ||
                          curr.transmitting != g_prev_state.transmitting);
@@ -749,9 +750,6 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
         return;
     const uint8_t *payload = tcp + tcp_hdr_len;
     int payload_len = hdr->caplen - header_total;
-
-    /* Every controller->deck frame is RX activity (the stream runs only on RX). */
-    clock_gettime(CLOCK_MONOTONIC, &g_last_activity);
 
     /* Decode the 0x44 status/command frame: TX state from byte 38 (every band),
        and band/frequency from offset 184 (its larger frames only). Identify it
@@ -909,13 +907,15 @@ static void mqtt_pub_state(void)
     fmt_freq(g_prev_state.freq, fbuf, sizeof fbuf);
     int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"relays\":[",
                      band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power);
-    for (int r = 0; r < NUM_RELAYS; r++)
+    for (int r = 0; r < NUM_RELAYS && n < (int)sizeof buf; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
-    n += snprintf(buf + n, sizeof buf - n, "],\"modes\":[");
-    for (int r = 0; r < NUM_RELAYS; r++)
+    if (n < (int)sizeof buf)
+        n += snprintf(buf + n, sizeof buf - n, "],\"modes\":[");
+    for (int r = 0; r < NUM_RELAYS && n < (int)sizeof buf; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s\"%s\"", r ? "," : "",
                       relay_locked[r] ? "manual" : "auto");
-    snprintf(buf + n, sizeof buf - n, "]}");
+    if (n < (int)sizeof buf)
+        snprintf(buf + n, sizeof buf - n, "]}");
     mqtt_pub("state", buf, 1);
 }
 
@@ -1029,8 +1029,10 @@ static void on_message(struct mosquitto *m, void *u, const struct mosquitto_mess
 
     pthread_mutex_lock(&cmd_mtx);
     int next = (cmd_head + 1) % CMD_QLEN;
-    if (next != cmd_tail) { cmd_q[cmd_head] = c; cmd_head = next; }
+    int full = (next == cmd_tail);
+    if (!full) { cmd_q[cmd_head] = c; cmd_head = next; }
     pthread_mutex_unlock(&cmd_mtx);
+    if (full) syslog(LOG_WARNING, "MQTT command queue full — command dropped");
 }
 
 static int mqtt_init(void)
@@ -1120,7 +1122,6 @@ int main(void)
     int fd = pcap_get_selectable_fd(handle);
     if (fd < 0)
         syslog(LOG_WARNING, "no selectable fd — using fallback timing");
-    clock_gettime(CLOCK_MONOTONIC, &g_last_activity);
     syslog(LOG_INFO, "Entering capture loop");
 
     /* 4. Main loop: multiplex packet arrival and timed relay events */
@@ -1129,8 +1130,8 @@ int main(void)
             struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
             int t = next_timeout_ms();
             /* Wake at least every 50 ms (once we have a band, or MQTT is on) so
-               stream-silence TX detection and MQTT stay responsive even with no
-               packets. A sooner scheduled relay event still wins. */
+               MQTT stays responsive even with no packets. A sooner scheduled
+               relay event still wins. */
             if ((g_mqtt_enable || g_have_band) && (t < 0 || t > 50)) t = 50;
             int pr = poll(&pfd, 1, t);
             if (pr < 0) {
@@ -1156,7 +1157,7 @@ int main(void)
         }
         fire_due_events();
         cmd_drain();                       /* apply any queued MQTT commands */
-        apply_state();                     /* re-evaluate TX, incl. stream-silence detection */
+        apply_state();                     /* publish/act on any pending state change */
         if (g_mqtt_need_republish) { g_mqtt_need_republish = 0; mqtt_republish_all(); }
     }
 

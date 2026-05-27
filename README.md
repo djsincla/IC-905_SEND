@@ -1,8 +1,8 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.7** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.9** — [release notes](CHANGELOG.md)
 
-Automatic antenna/amplifier band switching for the **Icom IC-905** microwave/VHF/UHF transceiver.
+Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
 A Raspberry Pi sits on a network tap between the IC-905 *controller* and its *RF deck*, sniffs the Ethernet traffic between them, decodes the selected band and TX/RX state, and drives I²C relays to route the correct antenna/amp path — only while transmitting.
 
