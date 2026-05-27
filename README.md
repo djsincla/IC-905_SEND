@@ -43,12 +43,20 @@ The C program is designed for **sub-10ms latency**: libpcap in immediate mode (n
 | Reset pins | GPIO5 → Board 1, GPIO12 → Board 2 (`gpiochip0`; on Pi 5 this is the 40-pin header — `gpiochip4` is a symlink to it) |
 | Capture | network tap on `eth0` between IC-905 controller and RF deck |
 
-### Relay bit masks (PCA9538A output register `0x01`)
-| Relay | Pin | Mask |
-|---|---|---|
-| RL1 | P2 | `0x04` |
-| RL2 | P1 | `0x02` |
-| RL3 | P0 | `0x01` |
+### Relay → board → I²C → pin
+
+Both Click boards share the I²C bus (`/dev/i2c-1`) and are distinguished only by address (`0x70` / `0x73`, set by each board's address pins). On each board the three relays hang off PCA9538A pins **P0–P2**, switched via the output register (`0x01`); P3–P7 are inputs (config register `0x03 = 0xF8`). The software relay numbers `1`–`6` map to boards in order — 1–3 = Board 1, 4–6 = Board 2:
+
+| Relay (config) | Click board | I²C addr | PCA9538A pin | Output-reg bit |
+|---|---|---|---|---|
+| `1` | Board 1 | `0x70` | P2 | `0x04` |
+| `2` | Board 1 | `0x70` | P1 | `0x02` |
+| `3` | Board 1 | `0x70` | P0 | `0x01` |
+| `4` | Board 2 | `0x73` | P2 | `0x04` |
+| `5` | Board 2 | `0x73` | P1 | `0x02` |
+| `6` | Board 2 | `0x73` | P0 | `0x01` |
+
+To switch a relay the service recomposes that board's whole output byte from all its currently-closed relays and writes register `0x01`, so relays on the same board update in a single I²C write. Reset lines are separate GPIOs: **GPIO5 → Board 1, GPIO12 → Board 2**.
 
 ---
 
