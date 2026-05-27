@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.2** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.3** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** microwave/VHF/UHF transceiver.
 
@@ -231,6 +231,21 @@ mosquitto_pub -h 192.168.4.50 -u ic905 -P <pw> -t ic905/cmd/relay/5 -m auto
 ```
 
 > ⚠️ Manual relay commands are honored even during TX (a warning is logged). Switching relays under RF can hot-switch — operator's responsibility.
+
+---
+
+## Running lean
+
+This Pi is a dedicated appliance, so background services that could jitter the latency-sensitive sequencer are disabled (the service also gets its own core via `CPUAffinity=3` — see the systemd unit). Disabled as unused:
+
+```bash
+# leftover Node.js PM2 daemon (the retired Node-RED host)
+pm2 kill && sudo systemctl disable --now pm2-dwayne.service
+# Bluetooth, cellular-modem manager, GPIO-hotkey daemon — all unused here
+sudo systemctl disable --now bluetooth hciuart ModemManager triggerhappy
+```
+
+**Kept** (don't disable): `ssh`, `NetworkManager` + `wpa_supplicant` (WiFi management link), `avahi-daemon` (resolves `pi5.local`), `systemd-timesyncd` (clock), `mosquitto`, and `ic905-relay`. Result: idle load ≈ 0, ~330 MB RAM used. Re-enable any of the above with `sudo systemctl enable --now <service>`.
 
 ---
 
