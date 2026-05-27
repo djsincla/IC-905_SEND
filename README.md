@@ -4,7 +4,7 @@ Automatic antenna/amplifier band switching for the **Icom IC-905** microwave/VHF
 
 A Raspberry Pi sits on a network tap between the IC-905 *controller* and its *RF deck*, sniffs the Ethernet traffic between them, decodes the selected band and TX/RX state, and drives I²C relays to route the correct antenna/amp path — only while transmitting.
 
-> **Current runtime:** native C systemd service `ic905-relay`. This **replaces** the older Node-RED (tshark + `node-red-node-pi-gpio`) flow, which has been retired. The `flows` file in this repo is the legacy Node-RED design, kept for reference.
+> **Runtime:** a native C systemd service, `ic905-relay` — libpcap for capture, libgpiod + I²C for the relays, all on the Raspberry Pi.
 
 ---
 
@@ -79,10 +79,12 @@ The band→relay map is **user-editable** and supports **timed sequencing**: mul
 ```
 # relay, band, delay_ms
 # band: 2m 70cm 23cm 13cm 6cm 3cm  (or 144 430 1200 2400 5600 10g) or  all
-1, 23cm, 0      # closes immediately on 23cm TX
-2, 23cm, 10     # +10 ms
-4, 23cm, 20     # +20 ms
-3, all,  0      # closes on ANY band TX (e.g. amp PTT)
+1, 23cm, 0       # closes immediately on 23cm TX
+2, 23cm, 10      # +10 ms
+4, 23cm, 20      # +20 ms
+3, all,  0       # closes on ANY band TX (e.g. amp PTT)
+5, 2m/70cm, 0    # ONE relay shared by two bands (2m AND 70cm)
+6, 23cm/2m, 0/15 # mixed bands with per-band delays: 0 ms on 23cm, 15 ms on 2m
 ```
 
 - **On TX:** matching relays **close in increasing delay order**.
@@ -103,7 +105,8 @@ The band→relay map is **user-editable** and supports **timed sequencing**: mul
 | `Makefile` | Build / install / uninstall |
 | `ic905-relay.service` | systemd unit (runs as root, `Restart=on-failure`, `Nice=-10`) |
 | `ic905-relay.conf` | band→relay sequencing rules + MQTT settings (installed to `/etc/`, not clobbered on reinstall) |
-| `flows` | **Legacy** Node-RED flow (retired; reference only) |
+| `CONFIG-EXAMPLES.md` | ready-to-use sample relay/band/sequencing configs |
+| `docs/index.html` | project splash page (GitHub Pages) |
 
 ---
 
@@ -224,12 +227,11 @@ mosquitto_pub -h 192.168.4.50 -u ic905 -P <pw> -t ic905/cmd/relay/5 -m auto
 ## Troubleshooting
 
 **Crash-loop with `Failed to request GPIO outputs: Device or resource busy`**
-Something else holds GPIO5/GPIO12 (the PCA9538A reset pins). The usual culprit was the legacy Node-RED `node-red-node-pi-gpio` "out 5/12" nodes. Find the holder:
+Something else holds GPIO5/GPIO12 (the PCA9538A reset pins). Find the holder:
 ```bash
 sudo gpioinfo gpiochip0 | grep -E 'line +(5|12):'   # shows consumer name
-ps -eo pid,cmd | grep -iE 'node-red|nrgpio|lgpio'
 ```
-Free the pins (retire Node-RED — see below), then `sudo systemctl restart ic905-relay`.
+Stop whatever claims those lines, then `sudo systemctl restart ic905-relay`.
 
 **No decode even though traffic is flowing**
 - Check promiscuous mode is on: `cat /sys/class/net/eth0/flags` → must have bit `0x100`. The kernel also logs `eth0: entered promiscuous mode` at service start (`journalctl -k | grep promisc`).
@@ -243,22 +245,3 @@ Free the pins (retire Node-RED — see below), then `sudo systemctl restart ic90
 **I²C errors in the log**
 - `i2cdetect -y 1` should show `0x70` and `0x73`. Check wiring/power and that I²C is enabled.
 
----
-
-## Node-RED retirement & revert
-
-Node-RED was managed by **PM2** (boot unit `pm2-dwayne.service`). It was retired on **2026-05-25** because its GPIO nodes conflicted with the C service over GPIO5/12:
-
-```bash
-pm2 stop node-red
-pm2 delete node-red
-pm2 save --force            # so PM2 resurrect restores nothing on boot
-```
-
-The flows in `~/.node-red` are untouched. **To revert to Node-RED** (this disables the C service first):
-```bash
-sudo systemctl disable --now ic905-relay
-pm2 start $(which node-red) --name node-red && pm2 save
-```
-
-> Note: shutting down Node-RED also stopped anything else it hosted (e.g. the aedes MQTT broker on `:1883`). The C service is self-contained and does not need it.
