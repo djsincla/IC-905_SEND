@@ -2,6 +2,9 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.11 — 2026-05-27
+- **Relays sequence the actual TX band in split.** If a frame asserts TX (`byte 38 = 1`) on a band different from the one displayed/received — i.e. split with the transmit VFO on another band (RX 23cm / TX 2m) — the relays now follow the **transmitting** band. The dual-watch sub-VFO (non-transmitting, different band) is still ignored during TX. This closes a corner case where a mis-set split could otherwise have sequenced the wrong (displayed) band's relays.
+
 ## v1.10 — 2026-05-27
 - **Split + sub-VFO in MQTT:** new topics **`ic905/split`** (`on`/`off`, decoded from byte 236 bit 7 on idle frames) and **`ic905/band_b`** / **`ic905/freq_b`** (the dual-watch sub-VFO from byte 196 — e.g. main 23cm `1296.117.007` → sub `2m 144.375.000`). All three also appear in `ic905/state` and the `Split:` log line.
 - Power is now read **only on TX frames**, so split-enabled-while-idle no longer makes `ic905/power` read a false 50% (byte 236 is the forward-power meter during TX, the split bit when idle).

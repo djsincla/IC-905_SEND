@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.10"
+#define IC905_VERSION   "1.11"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -778,12 +778,13 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
     if (payload_len > TX_FLAG_OFFSET &&
         payload[CMD_TYPE_OFFSET] == 0x01 && payload[CMD_MSG_OFFSET] == CMD_MSG_ID) {
         radio_state_t s = decode_payload(payload, payload_len);
-        /* While transmitting, a freq frame for a DIFFERENT band is the dual-watch
-           sub-VFO (spurious) report — ignore it so it can't flip the band or drop
-           TX mid-transmit. Band-less command frames (TX edges) and same-band
-           frames always pass through. */
-        if (g_tx_bit && s.band != BAND_UNKNOWN && s.band != g_band) {
-            /* ignore spurious sub-VFO frame during TX */
+        /* While transmitting, a NON-transmitting frame for a different band is the
+           dual-watch sub-VFO (spurious) — ignore it so it can't flip the band or
+           drop TX. But a frame that ASSERTS TX on a different band IS the transmit
+           band (split: the TX VFO is on a different band than the one displayed) —
+           always follow it, so the relays sequence the band actually transmitted. */
+        if (g_tx_bit && !s.transmitting && s.band != BAND_UNKNOWN && s.band != g_band) {
+            /* ignore spurious sub-VFO (RX) frame during TX */
         } else {
             g_tx_bit = s.transmitting;
             if (s.band != BAND_UNKNOWN) {
