@@ -63,7 +63,7 @@ Net effect: a dedicated core doing one job at top priority → consistent **sub-
 | Board 1 address | `0x70` — bands 144 / 430 / 1200 MHz |
 | Board 2 address | `0x73` — bands 2400 / 5600 MHz / 10 GHz |
 | Reset pins | GPIO5 → Board 1, GPIO12 → Board 2 (`gpiochip0`; on Pi 5 this is the 40-pin header — `gpiochip4` is a symlink to it) |
-| Capture | network tap on `eth0` between IC-905 controller and RF deck |
+| Network tap | **Dualcomm ETAP-2003** — Gigabit port-aggregation tap, inline between the IC-905 controller and RF deck; transparently passes Icom's power-over-cable to the RF unit (not standard 802.3 PoE) and mirrors both directions to the Pi's `eth0`. Inline A↔B link is fail-open, so a dead/unpowered tap won't take the radio offline. |
 
 ### Relay → board → I²C → pin
 
