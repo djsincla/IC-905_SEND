@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.5"
+#define IC905_VERSION   "1.7"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -154,12 +154,12 @@ static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
 static uint64_t              g_freq = 0;             /* last decoded actual RF (Hz) */
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
-/* Per-band LO offset (MHz): actual RF = reported IF + offset. 2m = 0 (the IF IS
-   the true RF); 23cm verified on-air (IF 407.117 + 889 = 1296.117). 70cm/13cm/
-   6cm/3cm are estimates pending confirmation — override via freq_offset_<band>. */
+/* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
+   on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
+   23cm=889, 13cm=1738, 6cm=4687, 3cm=8611. Override any via freq_offset_<band>. */
 static int                   g_offset_mhz[BAND_COUNT] = {
-    [BAND_144] = 0, [BAND_430] = 197, [BAND_1200] = 889,
-    [BAND_2400] = 1834, [BAND_5600] = 4527, [BAND_10G] = 8611,
+    [BAND_144] = 0, [BAND_430] = 199, [BAND_1200] = 889,
+    [BAND_2400] = 1738, [BAND_5600] = 4687, [BAND_10G] = 8611,
 };
 static int                   g_tx_bit = 0;           /* TX bit from the last band frame */
 static int                   g_have_band = 0;        /* set once we've decoded a band */
@@ -613,6 +613,7 @@ static void reseq(radio_state_t prev, radio_state_t curr)
 #define CMD_MSG_OFFSET   10
 #define CMD_MSG_ID       0x44
 #define TX_FLAG_OFFSET   38
+#define POWER_OFFSET     236  /* TX power byte (start offset); only in the full ~240B frame */
 
 /*
  * Map the reported frequency field to a band. The field is the TRUE frequency
@@ -659,12 +660,25 @@ static radio_state_t decode_payload(const uint8_t *payload, int len)
         state.freq = (uint64_t)rawif +
             (state.band < BAND_COUNT ? (uint64_t)g_offset_mhz[state.band] * 1000000ull : 0);
 
-        /* TX power %: single byte 4 from the END of this freq frame (Node-RED
-           offsetFromEnd 8 nibbles), scaled byte/255*100. Verified 23cm: 0x40 = 25%. */
-        state.power = (payload[len - 4] * 100 + 127) / 255;
+        /* TX power %: byte at a FIXED offset, present only in the full (~240B)
+           status frame — the radio also sends abbreviated frames without it.
+           Verified 23cm 0x40=25%, 3cm 0x1a=10%. Leave power = -1 (unknown) on the
+           short frames so they don't clobber the value (handled in packet_handler). */
+        if (len > POWER_OFFSET)
+            state.power = (payload[POWER_OFFSET] * 100 + 127) / 255;
     }
 
     return state;
+}
+
+/* Format a frequency in Hz as MHz.kHz.Hz, e.g. 144375004 -> "144.375.004". */
+static const char *fmt_freq(uint64_t hz, char *buf, size_t n)
+{
+    snprintf(buf, n, "%llu.%03llu.%03llu",
+             (unsigned long long)(hz / 1000000ull),
+             (unsigned long long)((hz / 1000ull) % 1000ull),
+             (unsigned long long)(hz % 1000ull));
+    return buf;
 }
 
 /* ── pcap callback ────────────────────────────────────────────────────── */
@@ -695,14 +709,15 @@ static void apply_state(void)
     if (!bt_changed && !freq_changed && !power_changed) return;
 
     band_t cb = curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN;
+    char fbuf[24];
+    fmt_freq(curr.freq, fbuf, sizeof fbuf);
     if (curr.band != g_prev_state.band) {
         band_t pb = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
-        syslog(LOG_INFO, "Band: %s -> %s (%.3f MHz)", band_short[pb], band_short[cb],
-               curr.freq / 1e6);
+        syslog(LOG_INFO, "Band: %s -> %s (%s MHz)", band_short[pb], band_short[cb], fbuf);
     }
     if (curr.transmitting != g_prev_state.transmitting)
-        syslog(LOG_INFO, "TX: %s  %s  %.3f MHz", curr.transmitting ? "ON" : "OFF",
-               band_short[cb], curr.freq / 1e6);
+        syslog(LOG_INFO, "TX: %s  %s  %s MHz", curr.transmitting ? "ON" : "OFF",
+               band_short[cb], fbuf);
 
     radio_state_t prev = g_prev_state;
     g_prev_state = curr;
@@ -742,12 +757,21 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
     if (payload_len > TX_FLAG_OFFSET &&
         payload[CMD_TYPE_OFFSET] == 0x01 && payload[CMD_MSG_OFFSET] == CMD_MSG_ID) {
         radio_state_t s = decode_payload(payload, payload_len);
-        g_tx_bit = s.transmitting;
-        if (s.band != BAND_UNKNOWN) {
-            g_band      = s.band;
-            g_freq      = s.freq;
-            g_power     = s.power;
-            g_have_band = 1;
+        /* While transmitting, a freq frame for a DIFFERENT band is the dual-watch
+           sub-VFO (spurious) report — ignore it so it can't flip the band or drop
+           TX mid-transmit. Band-less command frames (TX edges) and same-band
+           frames always pass through. */
+        if (g_tx_bit && s.band != BAND_UNKNOWN && s.band != g_band) {
+            /* ignore spurious sub-VFO frame during TX */
+        } else {
+            g_tx_bit = s.transmitting;
+            if (s.band != BAND_UNKNOWN) {
+                if (s.band != g_band) g_power = -1;   /* new band: forget power until a full frame */
+                g_band      = s.band;
+                g_freq      = s.freq;
+                g_have_band = 1;
+                if (s.power >= 0) g_power = s.power;  /* only the full frame carries power */
+            }
         }
     }
 
@@ -834,23 +858,31 @@ static void mqtt_pub_band(void)
 
 static void mqtt_pub_tx(void)
 {
-    mqtt_pub("tx", g_prev_state.transmitting ? "ON" : "OFF", 1);
+    char buf[24];
+    if (g_prev_state.transmitting && g_prev_state.power >= 0)
+        snprintf(buf, sizeof buf, "ON %d%%", g_prev_state.power);   /* TX power level */
+    else
+        snprintf(buf, sizeof buf, "%s", g_prev_state.transmitting ? "ON" : "OFF");
+    mqtt_pub("tx", buf, 1);
 }
 
 static void mqtt_pub_freq(void)
 {
     if (!g_mosq) return;
     char buf[24];
-    snprintf(buf, sizeof buf, "%llu", (unsigned long long)g_prev_state.freq);
-    mqtt_pub("freq", buf, 1);   /* actual on-air RF in Hz (IF + per-band offset) */
+    fmt_freq(g_prev_state.freq, buf, sizeof buf);
+    mqtt_pub("freq", buf, 1);   /* actual on-air RF, MHz.kHz.Hz (e.g. 1296.117.007) */
 }
 
 static void mqtt_pub_power(void)
 {
-    if (!g_mosq || g_prev_state.power < 0) return;
+    if (!g_mosq) return;
     char buf[16];
-    snprintf(buf, sizeof buf, "%d", g_prev_state.power);
-    mqtt_pub("power", buf, 1);   /* TX power %, from the freq frame */
+    if (g_prev_state.power >= 0)
+        snprintf(buf, sizeof buf, "%d", g_prev_state.power);   /* TX power % */
+    else
+        snprintf(buf, sizeof buf, "unknown");                  /* band sent no full frame */
+    mqtt_pub("power", buf, 1);
 }
 
 static void mqtt_pub_state(void)
@@ -858,9 +890,10 @@ static void mqtt_pub_state(void)
     if (!g_mosq) return;
     band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
     char buf[320];
-    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":%llu,\"tx\":%d,\"power\":%d,\"relays\":[",
-                     band_short[b], (unsigned long long)g_prev_state.freq,
-                     g_prev_state.transmitting, g_prev_state.power);
+    char fbuf[24];
+    fmt_freq(g_prev_state.freq, fbuf, sizeof fbuf);
+    int n = snprintf(buf, sizeof buf, "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"relays\":[",
+                     band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power);
     for (int r = 0; r < NUM_RELAYS; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
     n += snprintf(buf + n, sizeof buf - n, "],\"modes\":[");

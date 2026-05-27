@@ -2,6 +2,18 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.7 — 2026-05-27
+- **TX power fixed for all bands:** the power byte is at a fixed offset (236) and only appears in the radio's full (~240-byte) status frame; the abbreviated frames were clobbering it to 0. Now read byte 236 only when present, and never overwrite a known value from a short frame (power also resets on band change). Verified 23cm 25%, 3cm 10%.
+- **All six frequency offsets confirmed on-air** and locked into the defaults: 2m=0, 70cm=199, 23cm=889, 13cm=1738, 6cm=4687, 3cm=8611 MHz (corrected the earlier 13cm/6cm estimates). Still overridable via `freq_offset_<band>`.
+- **Spurious sub-VFO ignored:** while transmitting, frequency frames for a *different* band (the dual-watch sub-VFO — e.g. 2m parked at 144.375 while you're on 3cm) are ignored, so they can't flip the band or drop TX mid-transmit.
+- **Power on the TX topic:** `ic905/tx` now reads e.g. `ON 25%` when keyed (power level included), `OFF` otherwise.
+- Note: power needs the full status frame, which not every band sends on every key — a band that only emits abbreviated frames will report power as unknown.
+
+## v1.6 — 2026-05-27
+- **Frequency shown as `MHz.kHz.Hz`** (e.g. `1296.117.007`) in the logs and in MQTT — `ic905/freq` and the `freq` field of `ic905/state` (now a string).
+- **70cm calibration confirmed:** offset 199 MHz (IF 233.065 + 199 = 432.065). Confirmed offsets are now 2m=0, 70cm=199, 23cm=889; 13cm/6cm/3cm still estimates.
+- **Known issue:** TX power decodes correctly only on 23cm; on 2m/70cm `ic905/power` reads 0 (the power byte sits at a different offset in those smaller frames) — fix pending a capture at a distinctive power level.
+
 ## v1.5 — 2026-05-26
 - **Actual on-air frequency:** the published/logged frequency is now the true RF, computed as `IF + per-band LO offset`. The IF tracks the dial 1:1, so it's exact to the Hz — verified on 23cm (IF 407.117 + 889 MHz = 1296.117 MHz, and a 7 Hz dial nudge shows as 7 Hz). The freq field is now 64-bit (6cm/3cm RF exceeds 32 bits).
 - **Per-band calibration:** offsets `2m = 0` and `23cm = 889 MHz` are confirmed on-air; `70cm`/`13cm`/`6cm`/`3cm` are estimates pending confirmation. Override any in the config: `freq_offset_<band> = <MHz>` (e.g. `freq_offset_23cm = 889`).
