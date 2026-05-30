@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.16"
+#define IC905_VERSION   "1.17"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -766,7 +766,9 @@ static void apply_state(void)
 
     if (bt_changed) reseq(prev, curr);
     if (bt_changed) { mqtt_pub_band(); mqtt_pub_tx(); }
-    if (sub_changed)   { mqtt_pub_band_b(); mqtt_pub_freq_b(); }
+    /* Republish band_b/freq_b on split toggle too — their semantic source flips
+       (primary when split, secondary otherwise) even when the raw bytes don't move. */
+    if (sub_changed || split_changed) { mqtt_pub_band_b(); mqtt_pub_freq_b(); }
     if (split_changed) mqtt_pub_split();
     mqtt_pub_freq();
     mqtt_pub_power();
@@ -912,8 +914,11 @@ static void mqtt_pub_mode(int relay)
 
 static void mqtt_pub_band(void)
 {
-    band_t b = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
-    mqtt_pub("band", band_short[b], 1);   /* ham wavelength name, e.g. "23cm" */
+    /* The OPERATING (transmit) VFO's band — what's on the air now, or what would
+       be if you keyed: secondary in split, primary otherwise. Always reflects the
+       actual TX VFO, never the receive-side one when in split. */
+    band_t b = g_prev_state.op_band < BAND_COUNT ? g_prev_state.op_band : BAND_UNKNOWN;
+    mqtt_pub("band", band_short[b], 1);
 }
 
 static void mqtt_pub_tx(void)
@@ -937,8 +942,10 @@ static void mqtt_pub_freq(void)
 {
     if (!g_mosq) return;
     char buf[24];
-    fmt_freq(g_prev_state.freq, buf, sizeof buf);
-    mqtt_pub("freq", buf, 1);   /* actual on-air RF, MHz.kHz.Hz (e.g. 1296.117.007) */
+    /* OPERATING (transmit) VFO frequency: the freq you'd transmit on now (=
+       secondary VFO in split, primary otherwise). MHz.kHz.Hz. */
+    fmt_freq(g_prev_state.op_freq, buf, sizeof buf);
+    mqtt_pub("freq", buf, 1);
 }
 
 static void mqtt_pub_power(void)
@@ -967,16 +974,23 @@ static void mqtt_pub_status(void)
 
 static void mqtt_pub_band_b(void)
 {
-    band_t b = g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN;
-    mqtt_pub("band_b", band_short[b], 1);   /* sub-VFO wavelength */
+    /* The OTHER (non-operating) VFO band — primary when split (the displayed/RX
+       VFO during a split TX), secondary otherwise. Paired with ic905/band so the
+       two topics always show "operating" and "other" distinctly. */
+    band_t b = g_prev_state.split
+                 ? (g_prev_state.band   < BAND_COUNT ? g_prev_state.band   : BAND_UNKNOWN)
+                 : (g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN);
+    mqtt_pub("band_b", band_short[b], 1);
 }
 
 static void mqtt_pub_freq_b(void)
 {
     if (!g_mosq) return;
     char buf[24];
-    fmt_freq(g_prev_state.freq_b, buf, sizeof buf);
-    mqtt_pub("freq_b", buf, 1);             /* sub-VFO actual RF, MHz.kHz.Hz */
+    /* OTHER VFO frequency (the non-operating one): primary when split, secondary otherwise. */
+    uint64_t f = g_prev_state.split ? g_prev_state.freq : g_prev_state.freq_b;
+    fmt_freq(f, buf, sizeof buf);
+    mqtt_pub("freq_b", buf, 1);
 }
 
 static void mqtt_pub_split(void)
@@ -987,12 +1001,21 @@ static void mqtt_pub_split(void)
 static void mqtt_pub_state(void)
 {
     if (!g_mosq) return;
-    band_t b  = g_prev_state.band   < BAND_COUNT ? g_prev_state.band   : BAND_UNKNOWN;
-    band_t bb = g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN;
+    /* band/freq = OPERATING (TX) VFO; band_b/freq_b = the OTHER VFO. */
+    band_t b  = g_prev_state.op_band < BAND_COUNT ? g_prev_state.op_band : BAND_UNKNOWN;
+    band_t bb;
+    uint64_t f_b;
+    if (g_prev_state.split) {
+        bb  = g_prev_state.band < BAND_COUNT ? g_prev_state.band : BAND_UNKNOWN;
+        f_b = g_prev_state.freq;
+    } else {
+        bb  = g_prev_state.band_b < BAND_COUNT ? g_prev_state.band_b : BAND_UNKNOWN;
+        f_b = g_prev_state.freq_b;
+    }
     char buf[384];
     char fbuf[24], fbbuf[24];
-    fmt_freq(g_prev_state.freq,   fbuf,  sizeof fbuf);
-    fmt_freq(g_prev_state.freq_b, fbbuf, sizeof fbbuf);
+    fmt_freq(g_prev_state.op_freq, fbuf,  sizeof fbuf);
+    fmt_freq(f_b,                  fbbuf, sizeof fbbuf);
     int n = snprintf(buf, sizeof buf,
                      "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"split\":%d,\"band_b\":\"%s\",\"freq_b\":\"%s\",\"relays\":[",
                      band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power,

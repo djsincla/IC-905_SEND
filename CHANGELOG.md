@@ -2,6 +2,12 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.17 — 2026-05-29
+- **`ic905/band` and `ic905/freq` now report the OPERATING (transmit) VFO** — what's on the air, or what would be if you keyed. In split this is the secondary VFO; otherwise the primary. **`ic905/band_b` / `ic905/freq_b` now report the OTHER VFO** (the displayed/RX VFO during a split TX), so the two pairs are always "operating" vs "other," distinct and useful.
+- The `band` / `freq` fields in `ic905/state` follow the same convention.
+- Fixes a real-world surprise: during a split TX, `ic905/freq` used to report the *primary* VFO's freq — i.e. the freq you were **receiving** on, not the freq actually on the air. Now they match.
+- `ic905/tx` is unchanged (already correct — `ON <band> <freq> <pwr>%` is the transmit band/freq/power).
+
 ## v1.16 — 2026-05-29
 - **Split detection switched to `payload[27] == 1`** — the long-validated indicator used by **K7MDL**'s [IC905_Ethernet_Decoder](https://github.com/K7MDL2/IC905_Ethernet_Decoder). A direct, band-independent flag — no frequency comparison, no derivation. Combined with the existing decode (byte 184 = primary/displayed VFO, byte 196 = secondary), the rule is simply: **split ON → transmit VFO = secondary (byte 196); otherwise → primary (byte 184)**. Same correctness as v1.15 across every primary/secondary and swapped VFO arrangement, but simpler and aligned with prior art.
 - **Resolves the v1.15 known issue.** With both VFOs on the **same band** + split, the reported TX *frequency* is now correctly the secondary VFO's frequency. Verified on-air: `TX: ON 23cm 1296.065.495 MHz [split: sub VFO]` (the secondary), not the primary (1296.066.253). v1.15's freq-comparison logic couldn't resolve which of two close same-band freqs was keyed; byte-27 + always-use-secondary-in-split makes the answer unambiguous.

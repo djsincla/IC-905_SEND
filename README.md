@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.16** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.17** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
@@ -228,10 +228,10 @@ mqtt_pass   = <password>
 | Topic | Payload |
 |---|---|
 | `ic905/status` | `online 50%` / `online` / `offline` — liveness + current power (offline via last-will) |
-| `ic905/band` | **active** VFO ham wavelength, e.g. `23cm` (byte 184) |
-| `ic905/freq` | active-VFO on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
-| `ic905/band_b` | **sub** VFO wavelength, e.g. `2m` (byte 196) |
-| `ic905/freq_b` | sub-VFO on-air RF as `MHz.kHz.Hz`, e.g. `144.375.000` |
+| `ic905/band` | **operating (transmit) VFO** ham wavelength — what's on the air, or what would be if you keyed. In split = secondary VFO; otherwise = primary/displayed VFO. |
+| `ic905/freq` | operating-VFO on-air RF as `MHz.kHz.Hz`, e.g. `1296.117.007` (= IF + per-band offset; calibrate with `freq_offset_<band>`) |
+| `ic905/band_b` | **the OTHER VFO** ham wavelength — the displayed/RX VFO during a split TX, secondary VFO otherwise. |
+| `ic905/freq_b` | other-VFO on-air RF as `MHz.kHz.Hz`, e.g. `144.375.000` |
 | `ic905/split` | `on` / `off` — direct flag from `payload[27] == 1` (per [K7MDL](https://github.com/K7MDL2/IC905_Ethernet_Decoder)'s well-validated decode). When on, **transmit VFO = secondary (byte 196)**; otherwise primary (byte 184). Band-independent, handles same-band split correctly (TX freq is always the secondary's). |
 | `ic905/power` | TX power %, e.g. `25` (or `unknown`) |
 | `ic905/tx` | the **transmit** band + RF + power, e.g. `ON 2m 144.375.004 25%` (the sub VFO when split) / `OFF` |
