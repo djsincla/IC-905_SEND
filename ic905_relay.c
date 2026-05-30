@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.15"
+#define IC905_VERSION   "1.16"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -161,11 +161,9 @@ static uint64_t              g_freq = 0;             /* last decoded actual RF (
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
 static band_t                g_band_b = BAND_UNKNOWN; /* sub-VFO band (byte 196) */
 static uint64_t              g_freq_b = 0;            /* sub-VFO actual RF (Hz) */
-static int                   g_tx_lowfreq = 0;        /* byte 236 bit 7 (idle): 1 = the LOWER-freq
-                                                          VFO is the transmit VFO (confirmed on-air,
-                                                          AB6A). Split is derived from this + the two
-                                                          VFO freqs, so it's independent of which VFO
-                                                          is primary/secondary. */
+static int                   g_split = 0;             /* split flag: payload[27] == 1.
+                                                          Direct, band-independent (per K7MDL2's
+                                                          well-validated IC905_Ethernet_Decoder). */
 /* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
    on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
    23cm=889, 13cm=1738, 6cm=4687, 3cm=8611. Override any via freq_offset_<band>. */
@@ -719,27 +717,20 @@ static void apply_state(void)
     curr.power = g_power;
     curr.band_b = g_band_b;
     curr.freq_b = g_freq_b;
-    /* Which VFO actually transmits (the band the relays MUST sequence):
-       byte 236 bit 7 on IDLE frames (latched in g_tx_lowfreq) = "the LOWER-frequency
-       VFO is the transmit VFO". byte 184 = primary/displayed VFO band, byte 196 =
-       secondary VFO band. Comparing the two VFO freqs and matching to that bit gives
-       the TX VFO independent of which VFO is primary, AND independent of which band
-       sits on VFO A vs B. Confirmed on-air (AB6A) across every primary/secondary and
-       swapped-VFO/band arrangement — it tracks FREQUENCY ORDER, not the A/B slot.
-       "split" is simply transmitting on the non-displayed (secondary) VFO.
-       NOTE: byte 236 is the forward-power meter during TX, so this bit is read only
-       on idle frames; the earlier "split = byte 236 bit 7" reading was wrong because
-       the bit's split-meaning flips with which band is primary. */
-    if (curr.band_b < BAND_COUNT) {                 /* two VFOs active */
-        int primary_lower = (curr.freq <= curr.freq_b);
-        int tx_primary    = (g_tx_lowfreq == primary_lower);
-        curr.op_band = tx_primary ? curr.band : curr.band_b;
-        curr.op_freq = tx_primary ? curr.freq : curr.freq_b;
-        curr.split   = tx_primary ? 0 : 1;
+    /* In split the IC-905 transmits on the unselected (secondary) VFO. Split is
+       indicated directly by byte 27 == 1 (latched in g_split, per K7MDL2's
+       IC905_Ethernet_Decoder). The relays MUST sequence the actual TX band:
+          split ON  +  valid secondary  ->  TX VFO = byte 196 (secondary)
+          otherwise                     ->  TX VFO = byte 184 (primary/displayed)
+       This is direct, band-independent, and handles same-band split correctly —
+       we just use byte 196 in split, no frequency-comparison guesswork. */
+    curr.split = g_split;
+    if (curr.split && curr.band_b < BAND_COUNT) {
+        curr.op_band = curr.band_b;
+        curr.op_freq = curr.freq_b;
     } else {
         curr.op_band = curr.band;
         curr.op_freq = curr.freq;
-        curr.split   = 0;
     }
 
     int bt_changed    = (curr.op_band != g_prev_state.op_band ||
@@ -824,9 +815,14 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                 g_have_band = 1;
                 if (s.power >= 0) g_power = s.power;  /* power only from TX full frames */
             }
-            /* The full (~240B) frame also carries the sub-VFO frequency at byte 196,
-               and at byte 236 the split flag (bit 7) when idle. */
-            if (payload_len > 236) {
+            /* Full-status frames (>= 200 bytes) carry the sub-VFO frequency at byte
+               196 ("unselected VFO" in K7MDL2's terms) and the split flag at byte 27:
+               payload[27] == 1 means split is enabled. byte 27 is a direct, band-
+               independent flag (per K7MDL2's IC905_Ethernet_Decoder, validated against
+               the same controller↔RF deck stream for a long time) — no frequency
+               comparison needed, and it handles same-band split correctly because the
+               TX VFO is then simply the secondary (byte 196), no guesswork. */
+            if (payload_len >= 200) {
                 uint32_t subif = payload[196] | (payload[197] << 8) |
                                  (payload[198] << 16) | ((uint32_t)payload[199] << 24);
                 band_t sb = freq_to_band(subif);
@@ -834,9 +830,7 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                     g_band_b = sb;
                     g_freq_b = (uint64_t)subif + (uint64_t)g_offset_mhz[sb] * 1000000ull;
                 }
-                if (!s.transmitting)
-                    g_tx_lowfreq = (payload[236] & 0x80) ? 1 : 0;  /* idle only: bit 7 set =
-                        the LOWER-frequency VFO is the transmit VFO (AB6A, on-air) */
+                g_split = (payload[27] == 1) ? 1 : 0;
             }
         }
     }

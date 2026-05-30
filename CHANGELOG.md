@@ -2,6 +2,11 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.16 — 2026-05-29
+- **Split detection switched to `payload[27] == 1`** — the long-validated indicator used by **K7MDL2**'s [IC905_Ethernet_Decoder](https://github.com/K7MDL2/IC905_Ethernet_Decoder). A direct, band-independent flag — no frequency comparison, no derivation. Combined with the existing decode (byte 184 = primary/displayed VFO, byte 196 = secondary), the rule is simply: **split ON → transmit VFO = secondary (byte 196); otherwise → primary (byte 184)**. Same correctness as v1.15 across every primary/secondary and swapped VFO arrangement, but simpler and aligned with prior art.
+- **Resolves the v1.15 known issue.** With both VFOs on the **same band** + split, the reported TX *frequency* is now correctly the secondary VFO's frequency. Verified on-air: `TX: ON 23cm 1296.065.495 MHz [split: sub VFO]` (the secondary), not the primary (1296.066.253). v1.15's freq-comparison logic couldn't resolve which of two close same-band freqs was keyed; byte-27 + always-use-secondary-in-split makes the answer unambiguous.
+- **Credit:** **K7MDL2** for the byte-27 split flag and the matching VFO offsets (184/196 — "selected"/"unselected" in his terminology).
+
 ## v1.15 — 2026-05-27
 - **Transmit-VFO / split detection reworked to be frequency-based and arrangement-independent (the real relay-safety fix).** The transmit VFO is now derived from **byte 236 bit 7 on *idle* frames = "the lower-frequency VFO is the transmit VFO"**, matched against the two VFO frequencies: **byte 184 = primary (displayed) VFO**, **byte 196 = secondary VFO**. The relays, the `TX:` log and `ic905/tx` sequence the band of whichever VFO actually transmits. `ic905/split` is derived as "transmitting on the non-displayed (secondary) VFO."
 - **Verified on-air (AB6A)** across every primary/secondary choice **and** with the two bands swapped onto the opposite VFOs — it tracks **frequency order, not the VFO A/B slot**, so it's correct no matter which VFO is primary or which band is on which VFO.
