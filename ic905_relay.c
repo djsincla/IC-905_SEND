@@ -162,7 +162,7 @@ static int                   g_power = -1;           /* last decoded TX power %,
 static band_t                g_band_b = BAND_UNKNOWN; /* sub-VFO band (byte 196) */
 static uint64_t              g_freq_b = 0;            /* sub-VFO actual RF (Hz) */
 static int                   g_split = 0;             /* split flag: payload[27] == 1.
-                                                          Direct, band-independent (per K7MDL2's
+                                                          Direct, band-independent (per K7MDL's
                                                           well-validated IC905_Ethernet_Decoder). */
 /* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
    on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
@@ -718,7 +718,7 @@ static void apply_state(void)
     curr.band_b = g_band_b;
     curr.freq_b = g_freq_b;
     /* In split the IC-905 transmits on the unselected (secondary) VFO. Split is
-       indicated directly by byte 27 == 1 (latched in g_split, per K7MDL2's
+       indicated directly by byte 27 == 1 (latched in g_split, per K7MDL's
        IC905_Ethernet_Decoder). The relays MUST sequence the actual TX band:
           split ON  +  valid secondary  ->  TX VFO = byte 196 (secondary)
           otherwise                     ->  TX VFO = byte 184 (primary/displayed)
@@ -816,9 +816,9 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                 if (s.power >= 0) g_power = s.power;  /* power only from TX full frames */
             }
             /* Full-status frames (>= 200 bytes) carry the sub-VFO frequency at byte
-               196 ("unselected VFO" in K7MDL2's terms) and the split flag at byte 27:
+               196 ("unselected VFO" in K7MDL's terms) and the split flag at byte 27:
                payload[27] == 1 means split is enabled. byte 27 is a direct, band-
-               independent flag (per K7MDL2's IC905_Ethernet_Decoder, validated against
+               independent flag (per K7MDL's IC905_Ethernet_Decoder, validated against
                the same controller↔RF deck stream for a long time) — no frequency
                comparison needed, and it handles same-band split correctly because the
                TX VFO is then simply the secondary (byte 196), no guesswork. */
