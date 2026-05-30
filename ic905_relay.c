@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.17"
+#define IC905_VERSION   "1.18"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -136,6 +136,8 @@ typedef struct {
     int      split;          /* 1 = split enabled (byte 236 bit 7, read when idle) */
     band_t   op_band;        /* OPERATING (transmit) band: split ? sub-VFO(196) : active(184) */
     uint64_t op_freq;        /* operating (transmit) RF in Hz — the sub VFO's when split */
+    int      preamp;         /* 1 = preamp ON (byte 284 of 288-byte 0x1801 frame, per K7MDL) */
+    int      atten;          /* 1 = attenuator ON (byte 285 of same frame, per K7MDL) */
 } radio_state_t;
 
 /* ── Scheduled relay events ───────────────────────────────────────────── */
@@ -155,7 +157,7 @@ static volatile sig_atomic_t g_running = 1;
 static int                   g_i2c_fd  = -1;
 static uint8_t               g_board_output[2];      /* [0]=board1, [1]=board2 */
 static int                   relay_on[NUM_RELAYS];   /* physical relay state */
-static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0 };
+static radio_state_t         g_prev_state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0, 0, 0 };
 static band_t                g_band = BAND_UNKNOWN;  /* last decoded band */
 static uint64_t              g_freq = 0;             /* last decoded actual RF (Hz) */
 static int                   g_power = -1;           /* last decoded TX power %, -1 = unknown */
@@ -164,6 +166,10 @@ static uint64_t              g_freq_b = 0;            /* sub-VFO actual RF (Hz) 
 static int                   g_split = 0;             /* split flag: payload[27] == 1.
                                                           Direct, band-independent (per K7MDL's
                                                           well-validated IC905_Ethernet_Decoder). */
+static int                   g_preamp = 0;            /* byte 284 of 288-byte 0x1801 frame (per K7MDL).
+                                                          1 = preamp ON, 0 = OFF. */
+static int                   g_atten  = 0;            /* byte 285 of same frame (per K7MDL).
+                                                          1 = attenuator ON, 0 = OFF. */
 /* Per-band LO offset (MHz): actual RF = reported IF + offset. All confirmed
    on-air against the operator's dial: 2m=0 (the IF IS the true RF), 70cm=199,
    23cm=889, 13cm=1738, 6cm=4687, 3cm=8611. Override any via freq_offset_<band>. */
@@ -208,6 +214,8 @@ static void mqtt_pub_status(void);
 static void mqtt_pub_band_b(void);
 static void mqtt_pub_freq_b(void);
 static void mqtt_pub_split(void);
+static void mqtt_pub_preamp(void);
+static void mqtt_pub_atten(void);
 static void mqtt_pub_state(void);
 
 /* ── Signal handling ──────────────────────────────────────────────────── */
@@ -653,7 +661,7 @@ static band_t freq_to_band(uint32_t freq)
 
 static radio_state_t decode_payload(const uint8_t *payload, int len)
 {
-    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0 };
+    radio_state_t state = { BAND_UNKNOWN, 0, 0, -1, BAND_UNKNOWN, 0, 0, BAND_UNKNOWN, 0, 0, 0 };
 
     /* TX state: byte 38 of the status/command frame — the controller's explicit
        transmit command to the RF deck (1 = TX, 0 = RX). Sent at every key edge,
@@ -732,14 +740,19 @@ static void apply_state(void)
         curr.op_band = curr.band;
         curr.op_freq = curr.freq;
     }
+    curr.preamp = g_preamp;
+    curr.atten  = g_atten;
 
-    int bt_changed    = (curr.op_band != g_prev_state.op_band ||
-                         curr.transmitting != g_prev_state.transmitting);
-    int freq_changed  = (curr.freq != g_prev_state.freq);
-    int power_changed = (curr.power != g_prev_state.power);
-    int sub_changed   = (curr.band_b != g_prev_state.band_b || curr.freq_b != g_prev_state.freq_b);
-    int split_changed = (curr.split != g_prev_state.split);
-    if (!bt_changed && !freq_changed && !power_changed && !sub_changed && !split_changed) return;
+    int bt_changed     = (curr.op_band != g_prev_state.op_band ||
+                          curr.transmitting != g_prev_state.transmitting);
+    int freq_changed   = (curr.freq != g_prev_state.freq);
+    int power_changed  = (curr.power != g_prev_state.power);
+    int sub_changed    = (curr.band_b != g_prev_state.band_b || curr.freq_b != g_prev_state.freq_b);
+    int split_changed  = (curr.split != g_prev_state.split);
+    int preamp_changed = (curr.preamp != g_prev_state.preamp);
+    int atten_changed  = (curr.atten  != g_prev_state.atten);
+    if (!bt_changed && !freq_changed && !power_changed && !sub_changed && !split_changed &&
+        !preamp_changed && !atten_changed) return;
 
     band_t cb = curr.band < BAND_COUNT ? curr.band : BAND_UNKNOWN;
     char fbuf[24];
@@ -760,6 +773,8 @@ static void apply_state(void)
         syslog(LOG_INFO, "Split: %s  (sub %s %s MHz)", curr.split ? "ON" : "OFF",
                band_short[sbb], sbuf);
     }
+    if (preamp_changed) syslog(LOG_INFO, "Preamp: %s", curr.preamp ? "ON" : "OFF");
+    if (atten_changed)  syslog(LOG_INFO, "Atten: %s",  curr.atten  ? "ON" : "OFF");
 
     radio_state_t prev = g_prev_state;
     g_prev_state = curr;
@@ -770,6 +785,8 @@ static void apply_state(void)
        (primary when split, secondary otherwise) even when the raw bytes don't move. */
     if (sub_changed || split_changed) { mqtt_pub_band_b(); mqtt_pub_freq_b(); }
     if (split_changed) mqtt_pub_split();
+    if (preamp_changed) mqtt_pub_preamp();
+    if (atten_changed)  mqtt_pub_atten();
     mqtt_pub_freq();
     mqtt_pub_power();
     mqtt_pub_status();
@@ -833,6 +850,12 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *hdr,
                     g_freq_b = (uint64_t)subif + (uint64_t)g_offset_mhz[sb] * 1000000ull;
                 }
                 g_split = (payload[27] == 1) ? 1 : 0;
+            }
+            /* The 288-byte 0x1801 frame carries preamp at byte 284 and attenuator
+               at byte 285 (per K7MDL, confirmed on-air AB6A: 01 = ON, 00 = OFF). */
+            if (payload_len == 288) {
+                g_preamp = (payload[284] == 1) ? 1 : 0;
+                g_atten  = (payload[285] == 1) ? 1 : 0;
             }
         }
     }
@@ -998,6 +1021,16 @@ static void mqtt_pub_split(void)
     mqtt_pub("split", g_prev_state.split ? "on" : "off", 1);
 }
 
+static void mqtt_pub_preamp(void)
+{
+    mqtt_pub("preamp", g_prev_state.preamp ? "on" : "off", 1);
+}
+
+static void mqtt_pub_atten(void)
+{
+    mqtt_pub("atten", g_prev_state.atten ? "on" : "off", 1);
+}
+
 static void mqtt_pub_state(void)
 {
     if (!g_mosq) return;
@@ -1017,9 +1050,10 @@ static void mqtt_pub_state(void)
     fmt_freq(g_prev_state.op_freq, fbuf,  sizeof fbuf);
     fmt_freq(f_b,                  fbbuf, sizeof fbbuf);
     int n = snprintf(buf, sizeof buf,
-                     "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"split\":%d,\"band_b\":\"%s\",\"freq_b\":\"%s\",\"relays\":[",
+                     "{\"band\":\"%s\",\"freq\":\"%s\",\"tx\":%d,\"power\":%d,\"split\":%d,\"band_b\":\"%s\",\"freq_b\":\"%s\",\"preamp\":%d,\"atten\":%d,\"relays\":[",
                      band_short[b], fbuf, g_prev_state.transmitting, g_prev_state.power,
-                     g_prev_state.split, band_short[bb], fbbuf);
+                     g_prev_state.split, band_short[bb], fbbuf,
+                     g_prev_state.preamp, g_prev_state.atten);
     for (int r = 0; r < NUM_RELAYS && n < (int)sizeof buf; r++)
         n += snprintf(buf + n, sizeof buf - n, "%s%d", r ? "," : "", relay_on[r]);
     if (n < (int)sizeof buf)
@@ -1094,6 +1128,8 @@ static void mqtt_republish_all(void)
     mqtt_pub_band_b();
     mqtt_pub_freq_b();
     mqtt_pub_split();
+    mqtt_pub_preamp();
+    mqtt_pub_atten();
     for (int r = 1; r <= NUM_RELAYS; r++) { mqtt_pub_relay(r); mqtt_pub_mode(r); }
     mqtt_pub_state();
 }

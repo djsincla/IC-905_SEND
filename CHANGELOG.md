@@ -2,6 +2,9 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.18 — 2026-05-30
+- **Preamp and attenuator in MQTT.** New topics **`ic905/preamp`** (`on`/`off`) and **`ic905/atten`** (`on`/`off`), decoded from byte 284 and byte 285 of the 288-byte `0x1801` status frame (per [K7MDL](https://github.com/K7MDL2/IC905_Ethernet_Decoder), confirmed on-air AB6A — `0x01` = ON, `0x00` = OFF). Both also appear in `ic905/state` as `"preamp":0/1` / `"atten":0/1`, and changes log as `Preamp: ON/OFF` / `Atten: ON/OFF` in the journal.
+
 ## v1.17 — 2026-05-29
 - **`ic905/band` and `ic905/freq` now report the OPERATING (transmit) VFO** — what's on the air, or what would be if you keyed. In split this is the secondary VFO; otherwise the primary. **`ic905/band_b` / `ic905/freq_b` now report the OTHER VFO** (the displayed/RX VFO during a split TX), so the two pairs are always "operating" vs "other," distinct and useful.
 - The `band` / `freq` fields in `ic905/state` follow the same convention.

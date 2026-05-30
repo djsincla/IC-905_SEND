@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.17** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.18** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
@@ -233,6 +233,8 @@ mqtt_pass   = <password>
 | `ic905/band_b` | **the OTHER VFO** ham wavelength — the displayed/RX VFO during a split TX, secondary VFO otherwise. |
 | `ic905/freq_b` | other-VFO on-air RF as `MHz.kHz.Hz`, e.g. `144.375.000` |
 | `ic905/split` | `on` / `off` — direct flag from `payload[27] == 1` (per [K7MDL](https://github.com/K7MDL2/IC905_Ethernet_Decoder)'s well-validated decode). When on, **transmit VFO = secondary (byte 196)**; otherwise primary (byte 184). Band-independent, handles same-band split correctly (TX freq is always the secondary's). |
+| `ic905/preamp` | `on` / `off` — byte 284 of the 288-byte `0x1801` frame (per K7MDL). |
+| `ic905/atten` | `on` / `off` — byte 285 of the same frame (per K7MDL). |
 | `ic905/power` | TX power %, e.g. `25` (or `unknown`) |
 | `ic905/tx` | the **transmit** band + RF + power, e.g. `ON 2m 144.375.004 25%` (the sub VFO when split) / `OFF` |
 | `ic905/relay/<1-6>` | `close` / `open` |
