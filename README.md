@@ -1,6 +1,6 @@
 # IC-905 SEND — Packet Capture, Relay Sequencer & MQTT
 
-**Station: AB6A** · **v1.18** — [release notes](CHANGELOG.md)
+**Station: AB6A** · **v1.19** — [release notes](CHANGELOG.md)
 
 Automatic antenna/amplifier band switching for the **Icom IC-905** VHF/UHF/SHF transceiver.
 
@@ -237,6 +237,7 @@ mqtt_pass   = <password>
 | `ic905/atten` | `on` / `off` — byte 285 of the same frame (per K7MDL). |
 | `ic905/power` | TX power %, e.g. `25` (or `unknown`) |
 | `ic905/tx` | the **transmit** band + RF + power, e.g. `ON 2m 144.375.004 25%` (the sub VFO when split) / `OFF` |
+| `ic905/tx_state` | plain `on` / `off` companion to `ic905/tx` — for Home Assistant's binary_sensor and any consumer that wants a clean boolean |
 | `ic905/relay/<1-6>` | `close` / `open` |
 | `ic905/relay/<1-6>/mode` | `auto` / `manual` |
 | `ic905/state` | JSON `{"band","freq","tx","power","split","band_b","freq_b","relays":[…],"modes":[…]}` |
@@ -258,6 +259,24 @@ mosquitto_pub -h 192.168.4.50 -u ic905 -P <pw> -t ic905/cmd/relay/5 -m auto
 ```
 
 > ⚠️ Manual relay commands are honored even during TX (a warning is logged). Switching relays under RF can hot-switch — operator's responsibility.
+
+---
+
+## Home Assistant integration
+
+`ic905-relay` v1.19+ publishes [Home Assistant MQTT auto-discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) messages on connect, so HA auto-creates a complete **IC-905 SEND** device with ~30 entities — no HA-side config beyond pointing it at the broker. Adding new fields later (e.g. AGC once that's decoded) is one publish call in the C service; HA picks the new entity up automatically.
+
+What you get in HA:
+- Sensors for band / freq / sub-VFO band+freq / power / status
+- Binary sensors for TX, split, preamp, attenuator
+- 6 relay switches (close/open) + 6 "→ Auto" buttons + 6 mode sensors, plus global "All → Auto / Manual" buttons
+- All under one device, with mdi icons and a "sw_version" matching this service
+
+The HA Companion app (iOS/Android) gives you the dashboard on your phone with push notifications.
+
+**Full setup walkthrough** + sample Lovelace dashboard YAML in [`home-assistant/`](home-assistant/).
+
+Opt out by setting `mqtt_ha_discovery = 0` in `/etc/ic905-relay.conf` if you'd rather HA not see this device.
 
 ---
 

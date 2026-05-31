@@ -37,7 +37,7 @@
 
 /* ── Configuration ────────────────────────────────────────────────────── */
 
-#define IC905_VERSION   "1.18"
+#define IC905_VERSION   "1.19"
 
 #define IFACE           "eth0"
 #define CAPTURE_FILTER  "dst port 50004"  /* controller->deck stream: heartbeat + the 0x44 status/command frames (band, frequency, TX state) */
@@ -190,6 +190,9 @@ static int   g_mqtt_port = 1883;
 static char  g_mqtt_prefix[64] = "ic905";
 static char  g_mqtt_user[64] = "";
 static char  g_mqtt_pass[64] = "";
+static int   g_mqtt_ha_discovery = 1;                     /* publish Home Assistant MQTT-discovery
+                                                             messages so HA auto-creates entities */
+static char  g_mqtt_ha_discovery_prefix[32] = "homeassistant"; /* HA's default discovery prefix */
 static volatile sig_atomic_t g_mqtt_need_republish = 0;
 
 static int   relay_locked[NUM_RELAYS];   /* 1 = held under manual MQTT control (sequencer skips it) */
@@ -428,6 +431,8 @@ static void load_config(const char *path)
             else if (!strcasecmp(key, "mqtt_prefix")) snprintf(g_mqtt_prefix, sizeof g_mqtt_prefix, "%s", val);
             else if (!strcasecmp(key, "mqtt_user"))   snprintf(g_mqtt_user, sizeof g_mqtt_user, "%s", val);
             else if (!strcasecmp(key, "mqtt_pass"))   snprintf(g_mqtt_pass, sizeof g_mqtt_pass, "%s", val);
+            else if (!strcasecmp(key, "mqtt_ha_discovery")) g_mqtt_ha_discovery = atoi(val);
+            else if (!strcasecmp(key, "mqtt_ha_discovery_prefix")) snprintf(g_mqtt_ha_discovery_prefix, sizeof g_mqtt_ha_discovery_prefix, "%s", val);
             else if (!strncasecmp(key, "freq_offset_", 12)) {
                 band_t b = band_from_token(key + 12);
                 if (b < BAND_COUNT) g_offset_mhz[b] = atoi(val);
@@ -959,6 +964,10 @@ static void mqtt_pub_tx(void)
         snprintf(buf, sizeof buf, "OFF");
     }
     mqtt_pub("tx", buf, 1);
+    /* Plain on/off companion for downstream consumers (e.g. Home Assistant
+       binary_sensor) that want a simple boolean state without parsing the rich
+       payload above. ic905/tx keeps its band/freq/pwr form. */
+    mqtt_pub("tx_state", g_prev_state.transmitting ? "on" : "off", 1);
 }
 
 static void mqtt_pub_freq(void)
@@ -1116,10 +1125,140 @@ static void cmd_drain(void)
     }
 }
 
+/* ── Home Assistant MQTT discovery ─────────────────────────────────────── */
+/* Publish retained HA discovery JSON so HA auto-creates entities for every
+   topic this service exposes. Idempotent — safe to re-publish on every reconnect.
+   See https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery */
+
+#define HA_DEVICE_BLOCK \
+    "\"dev\":{\"ids\":[\"ic905_send\"],\"name\":\"IC-905 SEND\"," \
+    "\"mdl\":\"Pi 5 + 2x PCA9538A\",\"mf\":\"AB6A\"," \
+    "\"sw\":\"" IC905_VERSION "\"," \
+    "\"cu\":\"https://github.com/djsincla/IC-905_SEND\"}"
+
+static void ha_pub_disc(const char *component, const char *uniq, const char *payload)
+{
+    if (!g_mosq) return;
+    char topic[160];
+    snprintf(topic, sizeof topic, "%s/%s/%s/config",
+             g_mqtt_ha_discovery_prefix, component, uniq);
+    mosquitto_publish(g_mosq, NULL, topic, (int)strlen(payload), payload, 0, 1);
+}
+
+static void ha_disc_sensor(const char *uniq, const char *name, const char *subtopic,
+                           const char *unit, const char *icon)
+{
+    char pl[640], st[96];
+    snprintf(st, sizeof st, "%s/%s", g_mqtt_prefix, subtopic);
+    int n = snprintf(pl, sizeof pl,
+        "{\"name\":\"%s\",\"uniq_id\":\"%s\",\"stat_t\":\"%s\"",
+        name, uniq, st);
+    if (unit && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"unit_of_meas\":\"%s\"", unit);
+    if (icon && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"ic\":\"%s\"", icon);
+    if (n < (int)sizeof pl)
+        snprintf(pl + n, sizeof pl - n, "," HA_DEVICE_BLOCK "}");
+    ha_pub_disc("sensor", uniq, pl);
+}
+
+static void ha_disc_binary(const char *uniq, const char *name, const char *subtopic,
+                           const char *dev_class, const char *icon)
+{
+    char pl[640], st[96];
+    snprintf(st, sizeof st, "%s/%s", g_mqtt_prefix, subtopic);
+    int n = snprintf(pl, sizeof pl,
+        "{\"name\":\"%s\",\"uniq_id\":\"%s\",\"stat_t\":\"%s\","
+        "\"pl_on\":\"on\",\"pl_off\":\"off\"",
+        name, uniq, st);
+    if (dev_class && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"dev_cla\":\"%s\"", dev_class);
+    if (icon && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"ic\":\"%s\"", icon);
+    if (n < (int)sizeof pl)
+        snprintf(pl + n, sizeof pl - n, "," HA_DEVICE_BLOCK "}");
+    ha_pub_disc("binary_sensor", uniq, pl);
+}
+
+static void ha_disc_switch(const char *uniq, const char *name, const char *state_sub,
+                           const char *cmd_sub, const char *on_pl, const char *off_pl,
+                           const char *icon)
+{
+    char pl[640], st[96], cmd[96];
+    snprintf(st,  sizeof st,  "%s/%s", g_mqtt_prefix, state_sub);
+    snprintf(cmd, sizeof cmd, "%s/%s", g_mqtt_prefix, cmd_sub);
+    int n = snprintf(pl, sizeof pl,
+        "{\"name\":\"%s\",\"uniq_id\":\"%s\",\"stat_t\":\"%s\",\"cmd_t\":\"%s\","
+        "\"stat_on\":\"%s\",\"stat_off\":\"%s\",\"pl_on\":\"%s\",\"pl_off\":\"%s\"",
+        name, uniq, st, cmd, on_pl, off_pl, on_pl, off_pl);
+    if (icon && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"ic\":\"%s\"", icon);
+    if (n < (int)sizeof pl)
+        snprintf(pl + n, sizeof pl - n, "," HA_DEVICE_BLOCK "}");
+    ha_pub_disc("switch", uniq, pl);
+}
+
+static void ha_disc_button(const char *uniq, const char *name, const char *cmd_sub,
+                           const char *press_pl, const char *icon)
+{
+    char pl[640], cmd[96];
+    snprintf(cmd, sizeof cmd, "%s/%s", g_mqtt_prefix, cmd_sub);
+    int n = snprintf(pl, sizeof pl,
+        "{\"name\":\"%s\",\"uniq_id\":\"%s\",\"cmd_t\":\"%s\",\"pl_prs\":\"%s\"",
+        name, uniq, cmd, press_pl);
+    if (icon && n < (int)sizeof pl)
+        n += snprintf(pl + n, sizeof pl - n, ",\"ic\":\"%s\"", icon);
+    if (n < (int)sizeof pl)
+        snprintf(pl + n, sizeof pl - n, "," HA_DEVICE_BLOCK "}");
+    ha_pub_disc("button", uniq, pl);
+}
+
+static void mqtt_publish_ha_discovery(void)
+{
+    if (!g_mqtt_ha_discovery || !g_mosq) return;
+    /* Read-only sensors */
+    ha_disc_sensor("ic905_band",   "Band",            "band",     NULL, "mdi:radio-tower");
+    ha_disc_sensor("ic905_freq",   "Frequency",       "freq",     NULL, "mdi:sine-wave");
+    ha_disc_sensor("ic905_band_b", "Other VFO Band",  "band_b",   NULL, "mdi:radio-tower");
+    ha_disc_sensor("ic905_freq_b", "Other VFO Freq",  "freq_b",   NULL, "mdi:sine-wave");
+    ha_disc_sensor("ic905_power",  "TX Power",        "power",    "%",  "mdi:flash");
+    ha_disc_sensor("ic905_status", "Service Status",  "status",   NULL, "mdi:check-circle-outline");
+    /* Binary sensors */
+    ha_disc_binary("ic905_tx",     "Transmitting",    "tx_state", NULL, "mdi:antenna");
+    ha_disc_binary("ic905_split",  "Split",           "split",    NULL, "mdi:call-split");
+    ha_disc_binary("ic905_preamp", "Preamp",          "preamp",   NULL, "mdi:amplifier");
+    ha_disc_binary("ic905_atten",  "Attenuator",      "atten",    NULL, "mdi:volume-low");
+    /* Relays: each is a switch (close/open) + a button (release to auto) + a mode sensor */
+    char uniq[40], name[40], state_sub[24], cmd_sub[32], mode_sub[32];
+    for (int r = 1; r <= NUM_RELAYS; r++) {
+        snprintf(state_sub, sizeof state_sub, "relay/%d",      r);
+        snprintf(cmd_sub,   sizeof cmd_sub,   "cmd/relay/%d",  r);
+        snprintf(mode_sub,  sizeof mode_sub,  "relay/%d/mode", r);
+
+        snprintf(uniq, sizeof uniq, "ic905_relay_%d", r);
+        snprintf(name, sizeof name, "Relay %d", r);
+        ha_disc_switch(uniq, name, state_sub, cmd_sub, "close", "open", "mdi:electric-switch");
+
+        snprintf(uniq, sizeof uniq, "ic905_relay_%d_auto", r);
+        snprintf(name, sizeof name, "Relay %d - Auto", r);
+        ha_disc_button(uniq, name, cmd_sub, "auto", "mdi:autorenew");
+
+        snprintf(uniq, sizeof uniq, "ic905_relay_%d_mode", r);
+        snprintf(name, sizeof name, "Relay %d Mode", r);
+        ha_disc_sensor(uniq, name, mode_sub, NULL, "mdi:cog-outline");
+    }
+    /* Global mode buttons */
+    ha_disc_button("ic905_mode_auto",   "All Relays -> Auto",   "cmd/mode", "auto",   "mdi:autorenew");
+    ha_disc_button("ic905_mode_manual", "All Relays -> Manual", "cmd/mode", "manual", "mdi:hand-back-right");
+
+    syslog(LOG_INFO, "MQTT HA discovery published (prefix=%s)", g_mqtt_ha_discovery_prefix);
+}
+
 /* RT thread: publish full current state (called after a (re)connect). */
 static void mqtt_republish_all(void)
 {
     if (!g_mosq) return;
+    mqtt_publish_ha_discovery();   /* idempotent; retained so HA picks up on its own connect too */
     mqtt_pub_status();
     mqtt_pub_band();
     mqtt_pub_tx();

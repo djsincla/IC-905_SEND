@@ -2,6 +2,11 @@
 
 All notable changes to **IC-905 SEND**. ([splash page](https://djsincla.github.io/IC-905_SEND/))
 
+## v1.19 — 2026-05-30
+- **Home Assistant MQTT auto-discovery.** On every (re)connect, `ic905-relay` publishes ~30 retained discovery JSON messages so HA auto-creates a complete **IC-905 SEND** device with all the entities — sensors (band, freq, sub-VFO band/freq, power, status), binary sensors (TX, split, preamp, atten), 6 relay switches, 6 per-relay "→ Auto" buttons, 6 per-relay mode sensors, and global "All → Auto / Manual" buttons. New fields added later (e.g. AGC) become a one-line addition; HA picks them up automatically. See [`home-assistant/`](home-assistant/) for setup + a sample Lovelace dashboard.
+- **New topic `ic905/tx_state`** (`on`/`off`) — a plain boolean companion to `ic905/tx` (which keeps its `ON <band> <freq> <pwr>%` rich form). Lets HA's binary sensor consume it cleanly without value templates. Additive; no breaking change.
+- New config knobs in `/etc/ic905-relay.conf` (both default-on): `mqtt_ha_discovery = 1` and `mqtt_ha_discovery_prefix = homeassistant`. Set discovery to `0` to suppress publishing if you don't want HA to see the device.
+
 ## v1.18 — 2026-05-30
 - **Preamp and attenuator in MQTT.** New topics **`ic905/preamp`** (`on`/`off`) and **`ic905/atten`** (`on`/`off`), decoded from byte 284 and byte 285 of the 288-byte `0x1801` status frame (per [K7MDL](https://github.com/K7MDL2/IC905_Ethernet_Decoder), confirmed on-air AB6A — `0x01` = ON, `0x00` = OFF). Both also appear in `ic905/state` as `"preamp":0/1` / `"atten":0/1`, and changes log as `Preamp: ON/OFF` / `Atten: ON/OFF` in the journal.
 

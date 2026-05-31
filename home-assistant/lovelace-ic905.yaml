@@ -1,0 +1,82 @@
+# Sample Lovelace dashboard for IC-905 SEND.
+# Import via HA: Settings → Dashboards → + ADD DASHBOARD → Start with raw config → paste this file.
+# All entities auto-created by ic905-relay's MQTT discovery (v1.19+).
+title: IC-905
+views:
+  - title: Radio
+    icon: mdi:radio-tower
+    cards:
+      - type: glance
+        title: Status
+        columns: 4
+        entities:
+          - entity: binary_sensor.ic905_tx
+            name: TX
+          - entity: sensor.ic905_band
+            name: Band
+          - entity: sensor.ic905_freq
+            name: Freq
+          - entity: binary_sensor.ic905_split
+            name: Split
+          - entity: sensor.ic905_power
+            name: Power
+          - entity: binary_sensor.ic905_preamp
+            name: Preamp
+          - entity: binary_sensor.ic905_atten
+            name: Atten
+          - entity: sensor.ic905_status
+            name: Service
+
+      - type: entities
+        title: Other VFO
+        entities:
+          - entity: sensor.ic905_band_b
+            name: Band
+          - entity: sensor.ic905_freq_b
+            name: Frequency
+
+      - type: entities
+        title: Relays
+        show_header_toggle: false
+        entities:
+          - type: section
+            label: Per-relay control
+          - entity: switch.ic905_relay_1
+            secondary_info: last-changed
+          - entity: button.ic905_relay_1_auto
+            name: → Auto
+          - entity: switch.ic905_relay_2
+            secondary_info: last-changed
+          - entity: button.ic905_relay_2_auto
+            name: → Auto
+          - entity: switch.ic905_relay_3
+            secondary_info: last-changed
+          - entity: button.ic905_relay_3_auto
+            name: → Auto
+          - entity: switch.ic905_relay_4
+            secondary_info: last-changed
+          - entity: button.ic905_relay_4_auto
+            name: → Auto
+          - entity: switch.ic905_relay_5
+            secondary_info: last-changed
+          - entity: button.ic905_relay_5_auto
+            name: → Auto
+          - entity: switch.ic905_relay_6
+            secondary_info: last-changed
+          - entity: button.ic905_relay_6_auto
+            name: → Auto
+          - type: section
+            label: All relays
+          - entity: button.ic905_mode_auto
+            name: All → Auto (release to sequencer)
+          - entity: button.ic905_mode_manual
+            name: All → Manual (freeze)
+
+      - type: history-graph
+        title: TX & Power — last 24 h
+        hours_to_show: 24
+        entities:
+          - entity: binary_sensor.ic905_tx
+            name: Transmitting
+          - entity: sensor.ic905_power
+            name: TX Power %
